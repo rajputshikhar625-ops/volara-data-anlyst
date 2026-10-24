@@ -108,6 +108,20 @@ DEFAULTS = {
     "row_selection_default": True,
     "loaded_upload_fingerprint": None,
     "dark_mode": False,
+    "report_ribbon": "Home",
+    "report_page": "Overview",
+    "report_right_tab": "Visualize",
+    "report_show_fields": True,
+    "report_show_right": True,
+    "report_selected_rows": [],
+    "report_select_all": True,
+    "report_selection_action": None,
+    "dashboard_filter_column": "All fields",
+    "dashboard_filter_values": [],
+    "dashboard_datasets": {},
+    "dashboard_charts": [],
+    "dashboard_initialized": False,
+    "builder_upload_fingerprint": None,
 }
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -146,11 +160,39 @@ def clear_row_selection():
     st.session_state["row_selection_default"] = True
 
 
+def _default_dashboard_charts(dataframe, dataset_name):
+    numeric = dataframe.select_dtypes(include="number").columns.tolist()
+    categories = [column for column in dataframe.columns if column not in numeric]
+    group = categories[0] if categories else (dataframe.columns[0] if len(dataframe.columns) else None)
+    measure = numeric[0] if numeric else ""
+    charts = []
+    for index, chart_type in enumerate(("column", "bar", "donut"), start=1):
+        title = f"{chart_type.title()} chart · {group}" if group else f"{chart_type.title()} chart"
+        charts.append({
+            "id": index,
+            "title": title,
+            "dataset": dataset_name,
+            "type": chart_type,
+            "group": group,
+            "measure": measure,
+            "aggregation": "Sum" if measure else "Count",
+            "span": 6,
+        })
+    return charts
+
+
 def set_dataset(dataframe, table_name=None, sources=None, fingerprint=None):
     st.session_state.df = dataframe.reset_index(drop=True)
     st.session_state.table_name = table_name or "local_dataset"
     st.session_state.source_files = sources or []
     st.session_state.loaded_upload_fingerprint = fingerprint
+    dataset_name = str(st.session_state.table_name)
+    st.session_state.dashboard_datasets[dataset_name] = st.session_state.df.copy()
+    if not st.session_state.dashboard_charts and not st.session_state.dashboard_initialized:
+        st.session_state.dashboard_charts = _default_dashboard_charts(st.session_state.df, dataset_name)
+        st.session_state.dashboard_initialized = True
+    st.session_state.report_selected_rows = list(range(len(st.session_state.df)))
+    st.session_state.report_select_all = True
     clear_row_selection()
 
 
@@ -263,6 +305,387 @@ def render_downloads(dataframe, table_name, key_prefix="exports"):
         st.download_button("PDF" if compact else "Dashboard PDF", pdf_bytes, "volara_dashboard.pdf", "application/pdf", use_container_width=True, key=f"{key_prefix}_pdf")
 
 
+def add_dashboard_chart(chart_type, dataset_name=None):
+    datasets = st.session_state.dashboard_datasets
+    if dataset_name is None:
+        dataset_name = str(st.session_state.table_name or next(iter(datasets), ""))
+    dataframe = datasets.get(dataset_name, st.session_state.df)
+    if dataframe is None or dataframe.empty or not len(dataframe.columns):
+        st.warning("Load a dataset before adding a chart.")
+        return
+    numeric = dataframe.select_dtypes(include="number").columns.tolist()
+    categories = [column for column in dataframe.columns if column not in numeric]
+    group = categories[0] if categories else dataframe.columns[0]
+    measure = numeric[0] if numeric else ""
+    next_id = max([int(chart.get("id", 0)) for chart in st.session_state.dashboard_charts] + [0]) + 1
+    st.session_state.dashboard_charts.append({
+        "id": next_id, "title": f"{chart_type.title()} chart · {group}", "dataset": dataset_name,
+        "type": chart_type, "group": group, "measure": measure,
+        "aggregation": "Sum" if measure else "Count", "span": 6,
+    })
+    st.session_state.report_page = "Dashboard"
+
+
+def _aggregate_dashboard_chart(dataframe, group, measure, aggregation):
+    if dataframe is None or dataframe.empty or group not in dataframe.columns:
+        return pd.DataFrame(columns=[group or "Group", "value"])
+    if aggregation == "Count" or not measure or measure not in dataframe.columns:
+        result = dataframe.groupby(group, dropna=False).size().rename("value").reset_index()
+    elif aggregation == "Average":
+        result = dataframe.groupby(group, dropna=False)[measure].mean().rename("value").reset_index()
+    else:
+        result = dataframe.groupby(group, dropna=False)[measure].sum().rename("value").reset_index()
+    result[group] = result[group].fillna("(Blank)").astype(str)
+    return result.sort_values("value", ascending=False).head(20)
+
+
+def _dashboard_chart_figure(dataframe, chart_type, group, measure, aggregation, height=310):
+    grouped = _aggregate_dashboard_chart(dataframe, group, measure, aggregation)
+    if grouped.empty:
+        return None
+    label = measure if aggregation != "Count" and measure else "Rows"
+    if chart_type in {"donut", "Pie chart"}:
+        figure = px.pie(grouped, names=group, values="value", hole=0.48, color_discrete_sequence=px.colors.qualitative.Safe)
+    elif chart_type in {"bar", "Horizontal chart"}:
+        figure = px.bar(grouped.sort_values("value"), x="value", y=group, orientation="h", color_discrete_sequence=["#16a34a"])
+    else:
+        figure = px.bar(grouped, x=group, y="value", color_discrete_sequence=["#2563eb"])
+    figure.update_layout(
+        template="plotly_white", paper_bgcolor="#ffffff", plot_bgcolor="#ffffff", height=height,
+        margin=dict(l=12, r=12, t=22, b=18), showlegend=chart_type in {"donut", "Pie chart"},
+        xaxis_title=None if chart_type in {"bar", "Horizontal chart"} else label,
+        yaxis_title=group if chart_type in {"bar", "Horizontal chart"} else None, legend_title_text="",
+    )
+    figure.update_xaxes(showgrid=True, gridcolor="#e3e6ec", zeroline=False)
+    figure.update_yaxes(showgrid=False, zeroline=False)
+    return figure
+
+
+def _render_builder_chart(spec, datasets, filter_column=None, filter_values=None):
+    chart_id = int(spec["id"])
+    with st.container():
+        title = st.text_input("Title", value=spec.get("title", "Untitled chart"), key=f"builder_title_{chart_id}")
+        dataset_names = list(datasets)
+        if not dataset_names:
+            st.info("Add a dataset to configure this chart.")
+            return
+        saved_dataset = spec.get("dataset")
+        initial_dataset = saved_dataset if saved_dataset in dataset_names else dataset_names[0]
+        dataset_name = st.selectbox("Data", dataset_names, index=dataset_names.index(initial_dataset), key=f"builder_dataset_{chart_id}")
+        dataframe = datasets[dataset_name]
+        available = dataframe.copy()
+        if filter_column and filter_column in available.columns and filter_values:
+            available = available[available[filter_column].astype(str).isin(filter_values)]
+        numeric = dataframe.select_dtypes(include="number").columns.tolist()
+        categories = [column for column in dataframe.columns if column not in numeric]
+        group_options = categories or dataframe.columns.tolist()
+        if not group_options:
+            st.info("This dataset has no columns to chart.")
+            return
+        saved_group = spec.get("group")
+        initial_group = saved_group if saved_group in group_options else group_options[0]
+        group = st.selectbox("Group by", group_options, index=group_options.index(initial_group), key=f"builder_group_{chart_id}_{dataset_name}")
+        chart_types = {"Column": "column", "Bar": "bar", "Pie / donut": "donut"}
+        selected_type = spec.get("type", "column")
+        type_label = next((label for label, value in chart_types.items() if value == selected_type), "Column")
+        chart_label = st.selectbox("Chart", list(chart_types), index=list(chart_types).index(type_label), key=f"builder_type_{chart_id}")
+        chart_type = chart_types[chart_label]
+        measures = ["Count"] + numeric
+        saved_measure = spec.get("measure") or "Count"
+        initial_measure = saved_measure if saved_measure in measures else measures[0]
+        measure = st.selectbox("Measure", measures, index=measures.index(initial_measure), key=f"builder_measure_{chart_id}_{dataset_name}")
+        agg_options = ["Count"] if measure == "Count" else ["Sum", "Average", "Count"]
+        saved_agg = spec.get("aggregation", "Sum")
+        aggregation = st.selectbox("Calculate", agg_options, index=agg_options.index(saved_agg) if saved_agg in agg_options else 0, key=f"builder_agg_{chart_id}_{dataset_name}")
+        width_labels = {"4 of 12": 4, "6 of 12": 6, "12 of 12": 12}
+        initial_span = spec.get("span", 6)
+        initial_width = next((label for label, value in width_labels.items() if value == initial_span), "6 of 12")
+        width_label = st.selectbox("Width", list(width_labels), index=list(width_labels).index(initial_width), key=f"builder_span_{chart_id}")
+        span = width_labels[width_label]
+        spec.update({"title": title, "dataset": dataset_name, "group": group, "type": chart_type,
+                     "measure": "" if measure == "Count" else measure, "aggregation": aggregation, "span": span})
+        chart_frame = available
+        figure = _dashboard_chart_figure(chart_frame, chart_type, group, "" if measure == "Count" else measure, aggregation)
+        if figure is not None:
+            st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False}, key=f"builder_plot_{chart_id}")
+            st.caption(f"{len(chart_frame):,} rows · {aggregation} · {group}")
+            st.download_button("Export chart", figure.to_html(full_html=True, include_plotlyjs="cdn"), f"volara_chart_{chart_id}.html", "text/html", key=f"builder_export_{chart_id}")
+        else:
+            st.info("No rows match the current filters.")
+        if st.button("Remove chart", key=f"builder_remove_{chart_id}"):
+            st.session_state.dashboard_charts = [chart for chart in st.session_state.dashboard_charts if int(chart["id"]) != chart_id]
+            st.rerun()
+
+
+def _render_report_chat(dataframe, category, metric, api_health):
+    st.markdown("##### Ask about this report")
+    st.caption("Ask a question about the data on this canvas.")
+    for message in st.session_state.messages[-6:]:
+        role = "You" if message.get("role") == "user" else "Volara"
+        st.markdown(f"**{role}:** {html.escape(str(message.get('content', '')))}")
+    with st.form("report_designer_chat", clear_on_submit=True):
+        question = st.text_input("Ask Volara", placeholder="Ask about this data…", label_visibility="collapsed")
+        send = st.form_submit_button("Send", use_container_width=True, type="primary")
+    if send and question.strip():
+        history = list(st.session_state.messages[-6:])
+        st.session_state.messages.append({"role": "user", "content": question})
+        answer = answer_with_ai(question, dataframe, category, metric, api_health, history)
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.rerun()
+
+
+def render_report_designer(dataframe, table_name, api_health):
+    """Primary Volara report designer; its third page is the editable chart builder."""
+    st.markdown("## Volara Data Analyst <span style='color:#2563eb'>· Report Designer</span>", unsafe_allow_html=True)
+    ribbon = st.radio("Report ribbon", ["Home", "Insert", "View"], horizontal=True, key="report_ribbon", label_visibility="collapsed")
+    if ribbon == "Home":
+        actions = st.columns([1, 1, 1, 2.6], gap="small")
+        with actions[0]:
+            if st.button("Sample data", use_container_width=True, key="designer_sample"):
+                load_sample(api_health)
+                st.rerun()
+        with actions[1]:
+            if st.button("Select all", use_container_width=True, key="designer_select_all"):
+                st.session_state.report_selection_action = "all"
+        with actions[2]:
+            action = st.selectbox("Selection", ["Select all", "Clear", "Invert"], key="designer_selection_action")
+            if st.button("Apply", use_container_width=True, key="designer_apply_selection"):
+                st.session_state.report_selection_action = {"Select all": "all", "Clear": "none", "Invert": "invert"}[action]
+        with actions[3]:
+            import_file = st.file_uploader("Import CSV", type=["csv"], key="designer_import_csv", label_visibility="collapsed")
+            if import_file:
+                fingerprint = (import_file.name, len(import_file.getvalue()))
+                if fingerprint != st.session_state.get("designer_import_fingerprint"):
+                    imported = read_uploaded(import_file)
+                    if imported is not None:
+                        set_dataset(imported, Path(import_file.name).stem, [import_file.name], fingerprint)
+                        st.session_state.designer_import_fingerprint = fingerprint
+                        st.rerun()
+    elif ribbon == "Insert":
+        inserts = st.columns(6, gap="small")
+        for column, chart_type, label in zip(inserts[:3], ["column", "bar", "donut"], ["+ Column chart", "+ Bar chart", "+ Donut chart"]):
+            with column:
+                if st.button(label, use_container_width=True, key=f"insert_{chart_type}"):
+                    add_dashboard_chart(chart_type)
+        for column, report_page, label in zip(inserts[3:], ["Overview", "Data table", "Dashboard"], ["KPI cards", "Data table", "Dashboard"]):
+            with column:
+                if st.button(label, use_container_width=True, key=f"insert_page_{report_page}"):
+                    st.session_state.report_page = report_page
+    else:
+        view_cols = st.columns(3, gap="small")
+        with view_cols[0]:
+            st.checkbox("Fields pane", key="report_show_fields")
+        with view_cols[1]:
+            st.checkbox("Right pane", key="report_show_right")
+        with view_cols[2]:
+            st.checkbox("Dark theme", key="dark_mode")
+
+    if st.session_state.dark_mode:
+        st.markdown("""
+        <style>
+        :root { --dl-bg:#17191f !important; --dl-panel:#22252d !important; --dl-line:#373b46 !important; --dl-text:#edf0f6 !important; --dl-muted:#a4abba !important; }
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], .stApp { background-color:#17191f !important; color:#edf0f6 !important; }
+        [data-testid="stSidebar"], [data-testid="stSidebarContent"] { background-color:#22252d !important; }
+        .stButton > button, .stDownloadButton > button, [data-baseweb="select"] > div, input, textarea { background:#2c303a !important; color:#edf0f6 !important; border-color:#555d6b !important; }
+        input::placeholder, textarea::placeholder { color:#a4abba !important; }
+        [data-testid="stMetric"] { background:#22252d !important; color:#edf0f6 !important; border-color:#373b46 !important; }
+        [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3, label, [data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color:#edf0f6 !important; }
+        .dl-data-table, .dl-data-table th, .dl-data-table td { color:#edf0f6; background:#22252d; }
+        .dl-data-table th { background:#2c303a !important; }
+        .dl-msg.bot { background:#2c303a !important; color:#edf0f6 !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+    if dataframe is not None:
+        dataset_name = str(table_name or "Uploaded data")
+        st.session_state.dashboard_datasets[dataset_name] = dataframe.copy()
+        if not st.session_state.dashboard_charts and not st.session_state.dashboard_initialized:
+            st.session_state.dashboard_charts = _default_dashboard_charts(dataframe, dataset_name)
+            st.session_state.dashboard_initialized = True
+    datasets = st.session_state.dashboard_datasets
+    numeric = dataframe.select_dtypes(include="number").columns.tolist() if dataframe is not None else []
+    categories = [column for column in dataframe.columns if column not in numeric] if dataframe is not None else []
+    category_options = categories or (dataframe.columns.tolist() if dataframe is not None else [])
+    active_category = st.session_state.get("dl_category", category_options[0] if category_options else None)
+    if active_category not in category_options and category_options:
+        active_category = category_options[0]
+    active_metric = st.session_state.get("dl_metric", numeric[0] if numeric else "Rows")
+    if active_metric not in ["Rows"] + numeric:
+        active_metric = numeric[0] if numeric else "Rows"
+
+    if st.session_state.report_selection_action and dataframe is not None:
+        all_rows = set(range(len(dataframe)))
+        current = set(st.session_state.report_selected_rows)
+        action = st.session_state.report_selection_action
+        st.session_state.report_selected_rows = sorted(all_rows if action == "all" else set() if action == "none" else all_rows - current)
+        st.session_state.report_select_all = action == "all"
+        st.session_state.report_selection_action = None
+
+    report_page = st.session_state.report_page
+    page_count = {"Overview": 1, "Data table": 2, "Dashboard": 3}.get(report_page, 1)
+    if dataframe is None:
+        st.info("Load a CSV or Excel file from the left, or choose **Sample data** in Home to start.")
+    show_fields, show_right = st.session_state.report_show_fields, st.session_state.report_show_right
+    weights = ([0.95] if show_fields else []) + [3.0] + ([1.2] if show_right else [])
+    columns = st.columns(weights, gap="small")
+    col_idx = 0
+    fields_col = columns[col_idx] if show_fields else None
+    col_idx += 1 if show_fields else 0
+    canvas_col = columns[col_idx]
+    col_idx += 1
+    right_col = columns[col_idx] if show_right else None
+    filtered = dataframe.copy() if dataframe is not None else None
+
+    if show_right:
+        with right_col:
+            right_tab = st.radio("Right pane", ["Visualize", "Filters", "Assistant"], key="report_right_tab", label_visibility="collapsed")
+            if dataframe is None:
+                st.caption("Load a dataset to configure visuals, filters, and chat.")
+            elif right_tab == "Visualize":
+                if report_page == "Dashboard":
+                    st.caption("Edit each chart inside its tile.")
+                else:
+                    st.markdown("#### Visualize")
+                    st.radio("Chart type", ["Column chart", "Horizontal chart", "Pie chart"], key="dl_chart_type")
+                    st.selectbox("Axis", category_options, index=category_options.index(active_category), key="dl_category")
+                    st.selectbox("Measure", ["Rows"] + numeric, index=(["Rows"] + numeric).index(active_metric), key="dl_metric")
+            elif right_tab == "Filters":
+                st.markdown("#### Filters on this page")
+                filter_column = st.selectbox("Filter field", ["All fields"] + dataframe.columns.tolist(), key="dashboard_filter_column")
+                if filter_column != "All fields":
+                    values = sorted(dataframe[filter_column].dropna().astype(str).unique().tolist())
+                    st.multiselect("Keep values", values, key="dashboard_filter_values")
+                if st.button("Clear filters", use_container_width=True, key="designer_clear_filters"):
+                    st.session_state.dashboard_filter_column = "All fields"
+                    st.session_state.dashboard_filter_values = []
+                    st.rerun()
+            else:
+                _render_report_chat(filtered, active_category, active_metric, api_health)
+
+    filter_column = st.session_state.get("dashboard_filter_column", "All fields")
+    filter_values = st.session_state.get("dashboard_filter_values", [])
+    if dataframe is not None and filter_column in dataframe.columns and filter_values:
+        filtered = dataframe[dataframe[filter_column].astype(str).isin(filter_values)].copy()
+    elif dataframe is not None:
+        filtered = dataframe.copy()
+
+    if show_fields:
+        with fields_col:
+            st.markdown("#### Fields")
+            if dataframe is None:
+                st.caption("Fields appear here when you load data.")
+            else:
+                st.caption(f"▾ {html.escape(str(table_name or 'Data'))}")
+                st.markdown("**Dimensions**")
+                for field in categories:
+                    st.markdown(f"▫ {html.escape(str(field))} · {html.escape(str(dataframe[field].dtype))}")
+                st.markdown("**Measures**")
+                for field in numeric:
+                    st.markdown(f"∑ {html.escape(str(field))} · {html.escape(str(dataframe[field].dtype))}")
+
+    with canvas_col:
+        st.markdown({"Overview": "### Overview", "Data table": "### Data table", "Dashboard": "### Dashboard builder"}.get(report_page, "### Overview"))
+        if dataframe is None:
+            st.markdown('<div class="dl-card"><b>Your report canvas</b><br><span class="dl-muted">Load a dataset to see KPIs, visuals, and the editable dashboard page.</span></div>', unsafe_allow_html=True)
+        elif report_page == "Overview":
+            kpis = st.columns(4, gap="small")
+            kpis[0].metric("Rows", f"{len(filtered):,}")
+            kpis[1].metric("Fields", f"{len(filtered.columns):,}")
+            kpis[2].metric("Blank cells", f"{int(filtered.isna().sum().sum()):,}")
+            selected_count = sum(index in set(st.session_state.report_selected_rows) for index in filtered.index)
+            kpis[3].metric("Selected rows", f"{selected_count:,}")
+            chart_type = st.session_state.get("dl_chart_type", "Column chart")
+            axis = st.session_state.get("dl_category", active_category)
+            measure = st.session_state.get("dl_metric", active_metric)
+            if axis in filtered.columns:
+                figure = _dashboard_chart_figure(filtered, chart_type, axis, "" if measure == "Rows" else measure,
+                                                 "Count" if measure == "Rows" else "Sum", height=400)
+                line = f"{len(filtered):,} filtered rows" if filter_values else f"All {len(filtered):,} rows"
+                st.markdown(f"**{html.escape(str(measure))} by {html.escape(str(axis))}** · {line}")
+                if figure is not None:
+                    st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+                    st.download_button("Export chart", figure.to_html(full_html=True, include_plotlyjs="cdn"), "volara_overview_chart.html", "text/html", key="overview_chart_export")
+                else:
+                    st.info("No rows match the selected filters.")
+        elif report_page == "Data table":
+            search = st.text_input("Search this table", placeholder="Type to find a value…", key="report_table_search")
+            sort_cols = st.columns([2, 1, 1], gap="small")
+            with sort_cols[0]:
+                sort_field = st.selectbox("Sort by", ["None"] + dataframe.columns.tolist(), key="report_table_sort")
+            with sort_cols[1]:
+                sort_direction = st.selectbox("Direction", ["Ascending", "Descending"], key="report_table_direction")
+            with sort_cols[2]:
+                st.caption(f"{len(filtered):,} filtered rows")
+            table_frame = filtered.copy()
+            if search.strip():
+                mask = table_frame.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
+                table_frame = table_frame[mask]
+            if sort_field != "None":
+                table_frame = table_frame.sort_values(sort_field, ascending=sort_direction == "Ascending", kind="stable")
+            table_frame = table_frame.head(250)
+            row_labels = {}
+            for index, row in table_frame.iterrows():
+                details = " · ".join(f"{column}: {str(row[column])[:36]}" for column in table_frame.columns[:3])
+                row_labels[f"{index + 1}: {details}"] = index
+            selected_indices = set(st.session_state.report_selected_rows)
+            selected_labels = [label for label, index in row_labels.items() if index in selected_indices]
+            chosen_labels = st.multiselect("Select rows for this report", list(row_labels), default=selected_labels, key="report_table_selection")
+            visible_indices = set(row_labels.values())
+            hidden_selection = selected_indices - visible_indices
+            st.session_state.report_selected_rows = sorted(hidden_selection | {row_labels[label] for label in chosen_labels})
+            st.markdown(f'<div class="dl-muted">Showing up to 250 matching rows · {len(st.session_state.report_selected_rows):,} rows selected</div>', unsafe_allow_html=True)
+            preview = table_frame.to_html(index=False, border=0, classes="dl-data-table")
+            st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
+        else:
+            builder_tools = st.columns([1, 1, 1, 1, 2], gap="small")
+            for column, chart_type, label in zip(builder_tools[:3], ["column", "bar", "donut"], ["+ Column chart", "+ Bar chart", "+ Donut chart"]):
+                with column:
+                    if st.button(label, use_container_width=True, key=f"builder_add_{chart_type}"):
+                        add_dashboard_chart(chart_type, str(table_name or next(iter(datasets), "")))
+            with builder_tools[3]:
+                if st.button("Clear charts", use_container_width=True, key="builder_clear_charts"):
+                    st.session_state.dashboard_charts = []
+            with builder_tools[4]:
+                imported_builder_file = st.file_uploader("Import CSV as dataset", type=["csv"], key="builder_dataset_upload")
+            if imported_builder_file:
+                import_fingerprint = (imported_builder_file.name, len(imported_builder_file.getvalue()))
+                if import_fingerprint != st.session_state.builder_upload_fingerprint:
+                    imported_dataframe = read_uploaded(imported_builder_file)
+                    if imported_dataframe is not None:
+                        builder_name = Path(imported_builder_file.name).stem
+                        datasets[builder_name] = imported_dataframe
+                        st.session_state.builder_upload_fingerprint = import_fingerprint
+                        st.success(f"Added {builder_name} · {len(imported_dataframe):,} rows")
+            if not datasets:
+                st.info("Load data first, then add and edit chart tiles.")
+            elif not st.session_state.dashboard_charts:
+                st.markdown('<div class="dl-card"><b>No charts yet.</b><br><span class="dl-muted">Add a chart above to start building this page.</span></div>', unsafe_allow_html=True)
+            else:
+                chart_specs = list(st.session_state.dashboard_charts)
+                index = 0
+                while index < len(chart_specs):
+                    if chart_specs[index].get("span", 6) >= 12:
+                        row_specs = [chart_specs[index]]
+                        tile_columns = [st.container()]
+                        index += 1
+                    elif index + 1 < len(chart_specs) and chart_specs[index + 1].get("span", 6) < 12:
+                        row_specs = chart_specs[index:index + 2]
+                        tile_columns = st.columns(2, gap="small")
+                        index += 2
+                    else:
+                        row_specs = [chart_specs[index]]
+                        tile_columns = [st.container()]
+                        index += 1
+                    for tile_col, spec in zip(tile_columns, row_specs):
+                        with tile_col:
+                            st.markdown('<div class="dl-card">', unsafe_allow_html=True)
+                            _render_builder_chart(spec, datasets, filter_column, filter_values)
+                            st.markdown('</div>', unsafe_allow_html=True)
+
+    st.radio("Report pages", ["Overview", "Data table", "Dashboard"], horizontal=True, key="report_page")
+    st.markdown(f'<div class="dl-muted" style="border-top:1px solid var(--dl-line);padding-top:8px">Page {page_count} of 3 · {len(dataframe) if dataframe is not None else 0:,} rows · {len(st.session_state.report_selected_rows):,} selected · {html.escape(str(table_name or "No source"))}</div>', unsafe_allow_html=True)
+
+
 def run_clean(dataframe, api_health):
     if api_health and st.session_state.table_name:
         try:
@@ -340,23 +763,6 @@ with st.sidebar:
     if st.session_state.page not in pages:
         st.session_state.page = "Dashboard"
     st.radio("Open workspace", pages, key="page", label_visibility="collapsed")
-
-    st.checkbox("Dark theme", key="dark_mode")
-    if st.session_state.dark_mode:
-        st.markdown("""
-        <style>
-        :root { --dl-bg:#17191f !important; --dl-panel:#22252d !important; --dl-line:#373b46 !important; --dl-text:#edf0f6 !important; --dl-muted:#a4abba !important; }
-        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], .stApp { background-color:#17191f !important; color:#edf0f6 !important; }
-        [data-testid="stSidebar"], [data-testid="stSidebarContent"] { background-color:#22252d !important; }
-        .stButton > button, .stDownloadButton > button, [data-baseweb="select"] > div, input, textarea { background:#2c303a !important; color:#edf0f6 !important; border-color:#555d6b !important; }
-        input::placeholder, textarea::placeholder { color:#a4abba !important; }
-        .dl-card, .dl-table-scroll, div[data-testid="stPlotlyChart"], [data-testid="stMetric"] { background:#22252d !important; color:#edf0f6 !important; border-color:#373b46 !important; }
-        [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3, label, [data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color:#edf0f6 !important; }
-        .dl-data-table, .dl-data-table th, .dl-data-table td { color:#edf0f6; background:#22252d; }
-        .dl-data-table th { background:#2c303a !important; }
-        .dl-msg.bot { background:#2c303a !important; color:#edf0f6 !important; }
-        </style>
-        """, unsafe_allow_html=True)
 
     st.markdown('<div class="dl-section">Connection</div>', unsafe_allow_html=True)
     if api_health:
@@ -438,159 +844,7 @@ with exports:
     render_downloads(df, st.session_state.table_name, "top")
 
 if page == "Dashboard":
-    main_column, chat_column = st.columns([2.55, 1], gap="medium")
-    with main_column:
-        if df is None:
-            chart_slot = st.empty()
-            with chart_slot.container():
-                st.markdown(
-                    '<div class="dl-card"><div class="dl-card-title">Your analysis canvas</div><p class="dl-muted">Upload a file from the left or load the sample sales dataset to start.</p></div>',
-                    unsafe_allow_html=True,
-                )
-            st.info("Supported files include CSV, Excel, SQL/SQLite, JSON, and Parquet.")
-        else:
-            # A report-style KPI strip gives the dashboard a quick, readable overview.
-            kpi_cols = st.columns(4)
-            kpi_cols[0].metric("Rows", f"{len(df):,}")
-            kpi_cols[1].metric("Columns", f"{len(df.columns):,}")
-            missing_count = int(df.isna().sum().sum())
-            kpi_cols[2].metric("Missing values", f"{missing_count:,}")
-            duplicate_count = int(df.duplicated().sum())
-            kpi_cols[3].metric("Duplicate rows", f"{duplicate_count:,}")
-            chart_slot = st.empty()
-            control_column, table_column = st.columns([0.82, 2.5], gap="small")
-            with control_column:
-                st.markdown('<div class="dl-section">Chart type</div>', unsafe_allow_html=True)
-                chart_type = st.radio(
-                    "Chart type",
-                    ["Column chart", "Horizontal chart", "Pie chart"],
-                    key="dl_chart_type",
-                    label_visibility="collapsed",
-                )
-                category = st.selectbox(
-                    "Category",
-                    category_cols or df.columns.tolist(),
-                    key="dl_category",
-                )
-                metric_options = ["Rows"] + numeric_cols
-                metric = st.selectbox("Metric", metric_options, key="dl_metric")
-                filter_column = st.selectbox("Filter field", ["All values"] + df.columns.tolist(), key="dashboard_filter_column")
-                chart_df = df
-                if filter_column != "All values":
-                    filter_values = sorted(df[filter_column].dropna().astype(str).unique().tolist())
-                    selected_values = st.multiselect("Keep values", filter_values, key="dashboard_filter_values")
-                    if selected_values:
-                        chart_df = df[df[filter_column].astype(str).isin(selected_values)]
-                if st.button("Auto clean", use_container_width=True):
-                    run_clean(df, api_health)
-                    st.rerun()
-
-                with st.expander("Fields", expanded=False):
-                    for field in df.columns:
-                        st.caption(f"▦ {field} · {df[field].dtype}")
-
-            with table_column:
-                st.markdown(
-                    f'<div class="dl-muted" style="text-align:right;padding:6px 0">Preview · first {min(len(df), 200):,} rows</div>',
-                    unsafe_allow_html=True,
-                )
-                preview = df.head(200).to_html(index=False, border=0, classes="dl-data-table")
-                st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
-                chart_scope = f"{len(chart_df):,} filtered rows" if len(chart_df) != len(df) else f"All {len(df):,} rows"
-
-            chart_df = chart_df if df is not None else None
-            if chart_df is None or chart_df.empty:
-                figure = None
-            else:
-                if metric == "Rows":
-                    grouped = chart_df[category].value_counts(dropna=False).rename("value").reset_index()
-                    grouped.columns = [category, "value"]
-                    metric_label = "Rows"
-                else:
-                    grouped = (
-                        chart_df.groupby(category, dropna=False)[metric]
-                        .sum()
-                        .sort_values(ascending=False)
-                        .reset_index(name="value")
-                    )
-                    metric_label = metric
-                if chart_type == "Pie chart":
-                    figure = px.pie(grouped, names=category, values="value", hole=0.18)
-                elif chart_type == "Horizontal chart":
-                    figure = px.bar(grouped.sort_values("value"), x="value", y=category, orientation="h", color_discrete_sequence=["#16a34a"])
-                else:
-                    figure = px.bar(grouped, x=category, y="value", color_discrete_sequence=["#2563eb"])
-                figure.update_layout(
-                    template="plotly_white",
-                    paper_bgcolor="#ffffff",
-                    plot_bgcolor="#ffffff",
-                    font_color="#1f2430",
-                    height=400,
-                    margin=dict(l=12, r=12, t=20, b=18),
-                    showlegend=(chart_type == "Pie chart"),
-                    xaxis_title=None if chart_type == "Horizontal chart" else metric_label,
-                    yaxis_title=category if chart_type == "Horizontal chart" else None,
-                )
-                figure.update_xaxes(showgrid=True, gridcolor="#e3e6ec", zeroline=False)
-                figure.update_yaxes(showgrid=False, zeroline=False)
-            with chart_slot.container():
-                chart_title = f"{metric if metric != 'Rows' else 'Rows'} by {category}"
-                chart_meta = chart_scope if chart_df is not None else "No rows selected"
-                chart_header = st.columns([2.5, 1])
-                with chart_header[0]:
-                    st.markdown(
-                        f'<div class="dl-card-title">{html.escape(chart_title)}</div><div class="dl-muted">{html.escape(chart_meta)}</div>',
-                        unsafe_allow_html=True,
-                    )
-                with chart_header[1]:
-                    if figure is not None:
-                        st.download_button(
-                            "Export chart",
-                            figure.to_html(full_html=True, include_plotlyjs="cdn"),
-                            "volara_dashboard.html",
-                            "text/html",
-                            use_container_width=True,
-                        )
-                if figure is None:
-                    st.info("No chart can be shown for this selection. Try another category or number.")
-                else:
-                    st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
-
-    with chat_column:
-        st.markdown('<div class="dl-chat-head">AI Assistant</div>', unsafe_allow_html=True)
-        st.caption("Ask about the current dataset. Try one of these to get started:")
-        if df is not None:
-            easy_group = category if category else "group"
-            easy_measure = metric if metric and metric != "Rows" else "rows"
-        else:
-            easy_group, easy_measure = "group", "rows"
-        suggestions = [
-            "Give me a simple summary",
-            f"Which {easy_group} has the most {easy_measure}?",
-            f"Show me the top 5 {easy_group} groups by {easy_measure}.",
-        ]
-        for suggestion in suggestions:
-            if st.button(suggestion, key=f"chat_suggestion_{suggestion}", use_container_width=True, disabled=df is None):
-                history = list(st.session_state.messages[-6:])
-                st.session_state.messages.append({"role": "user", "content": suggestion})
-                reply = answer_with_ai(suggestion, df, category if df is not None else None, metric if df is not None else None, api_health, history)
-                st.session_state.messages.append({"role": "assistant", "content": reply})
-                st.rerun()
-        messages_area = st.container()
-        with messages_area:
-            for message in st.session_state.messages[-12:]:
-                role = "user" if message.get("role") == "user" else "bot"
-                safe_message = html.escape(str(message.get("content", "")))
-                st.markdown(f'<div class="dl-msg {role}">{safe_message}</div>', unsafe_allow_html=True)
-        with st.form("datalens_chat_form", clear_on_submit=True):
-            question = st.text_input("Ask about your data", placeholder="Ask about your data…", label_visibility="collapsed")
-            send = st.form_submit_button("Send", use_container_width=True, type="primary")
-        if send and question.strip():
-            history = list(st.session_state.messages[-6:])
-            st.session_state.messages.append({"role": "user", "content": question})
-            reply = answer_with_ai(question, df, category if df is not None else None, metric if df is not None else None, api_health, history)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
-            st.rerun()
+    render_report_designer(df, st.session_state.table_name, api_health)
 
 elif page == "Quick analysis":
     if df is None:
