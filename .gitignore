@@ -6,4 +6,5 @@ __pycache__/
 *.duckdb
 *.db
 /dist/
+/.test-temp/
 
