@@ -8,7 +8,7 @@ The **Dashboard** workspace is the primary screen and follows the supplied Volar
 
 - **Overview** — KPI cards, summary charts, filters, and data chat.
 - **Data table** — searchable and sortable data with row selection.
-- **Dashboard** — the visual dashboard builder. Add column, bar, and donut charts, choose data/grouping/measure/calculation/width, import another CSV as a dataset, or remove and clear charts.
+- **Dashboard** — the visual dashboard builder. Add column, bar, and donut charts, choose data/grouping/measure/calculation/width and an individual color for every chart, import another CSV as a dataset, or remove and clear charts.
 
 Other workspaces remain available: Quick analysis, Pivot table, Data Lab, Ask Volara, Reports, and Connectors. Google Sheets and external database connections on the Connectors page are placeholders and are not enabled yet.
 
@@ -19,6 +19,8 @@ Other workspaces remain available: Quick analysis, Pivot table, Data Lab, Ask Vo
 3. Double-click `RUN_VOLARA_DATA_ANALYST.bat` (the earlier `RUN_AURLEX_INSIGHTS.bat` is kept too).
 4. On first launch, the launcher prepares dependencies and starts the API and app. Open http://127.0.0.1:8501.
 5. Choose **Load sample dataset** to try the app without importing a file.
+
+CSV and Excel files load into the local dashboard. Excel uploads read the first non-empty worksheet. If the API rejects an otherwise readable CSV or workbook, the dashboard keeps working with the locally loaded data and shows the backend's specific message. `.xlsx` uses `openpyxl`; legacy `.xls` files use `xlrd`.
 
 The API is at http://127.0.0.1:8000 and its interactive docs are at http://127.0.0.1:8000/docs.
 
@@ -34,7 +36,7 @@ From the project folder, run:
 python -m unittest discover -s tests -v
 ```
 
-The checks cover workspace rendering, the V3 report designer pages and chart builder, filters, pivot logic, PDF generation, and Gemini model fallback.
+The checks cover workspace rendering, the V3 report designer pages and chart builder, per-chart colors, de-duplicated ribbon controls, CSV/Excel reading, filters, pivot logic, PDF generation, and Gemini model fallback.
 
 ## Run manually
 
