@@ -25,11 +25,17 @@ class FrontendSmokeTests(unittest.TestCase):
     def test_dashboard_export_controls_and_theme_are_available(self):
         app = AppTest.from_file("frontend/app.py", default_timeout=30).run()
         next(button for button in app.button if button.label == "Load sample dataset").click().run()
-        self.assertIn("Dashboard PDF", [button.label for button in app.get("download_button")])
+        self.assertIn("PDF", [button.label for button in app.get("download_button")])
         self.assertIn("Export chart", [button.label for button in app.get("download_button")])
         self.assertIn("Dark theme", [checkbox.label for checkbox in app.checkbox])
+        app.radio(key="dl_chart_type").set_value("Pie chart").run()
+        app.selectbox(key="dashboard_filter_column").set_value("region").run()
+        app.multiselect(key="dashboard_filter_values").select("North").run()
         app.checkbox[0].check().run()
         self.assertEqual(list(app.exception), [])
+        app.session_state["page"] = "Reports"
+        app.run()
+        self.assertIn("Dashboard PDF", [button.label for button in app.get("download_button")])
 
     def test_dashboard_pdf_is_a_valid_pdf_payload(self):
         content = build_pdf_report(pd.DataFrame({"Region": ["North"], "Revenue": [12]}), "sales")
