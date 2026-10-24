@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from .database import db_manager
 from .ai_engine import ai_engine
 from .cleaner import cleaner
+from .uploads import read_uploaded_dataframe
 
 load_dotenv()
 
@@ -56,7 +57,13 @@ def validate_table_exists(table_name: str):
     return table_name
 
 def read_one_file(file: UploadFile, contents: bytes) -> pd.DataFrame:
-    name = file.filename.lower()
+    name = (file.filename or "").lower()
+    if not contents:
+        raise ValueError("The selected file is empty.")
+    if name.endswith((".csv", ".xls", ".xlsx", ".xlsm", ".xltx", ".xltm", ".parquet", ".json")):
+        dataframe = read_uploaded_dataframe(name, contents)
+        if dataframe is not None:
+            return dataframe
     if name.endswith('.csv'):
         # try to detect encoding
         try:
@@ -101,10 +108,15 @@ def read_one_file(file: UploadFile, contents: bytes) -> pd.DataFrame:
 async def upload_dataset(file: UploadFile = File(...)):
     contents = await file.read()
     try:
-        df = read_one_file(file, contents)
+        try:
+            df = read_one_file(file, contents)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not read {file.filename or 'the selected file'}: {exc}") from exc
         if df.empty:
-            raise HTTPException(status_code=400, detail="Empty dataset")
-        raw_name = os.path.splitext(file.filename)[0]
+            raise HTTPException(status_code=400, detail="The selected file has no data rows.")
+        raw_name = os.path.splitext(file.filename or "uploaded_data")[0]
         safe_table = db_manager.register_dataframe(raw_name, df)
         return {
             "status": "success",
