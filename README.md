@@ -15,11 +15,16 @@ This package uses the v2.1 full-stack app: a FastAPI backend with a Streamlit da
 3. Double-click `RUN_AURLEX_INSIGHTS.bat`.
 4. On first launch, it creates a local Python environment and installs the dependencies. It then opens the dashboard at http://localhost:8501.
 
-The dashboard now uses the DataLens-style layout: a data panel on the left, charts and a data table in the center, and the Aurlex assistant on the right. Click **Load sample dataset** to explore immediately, or upload CSV/Excel files from the left panel.
+The dashboard uses a simple, guided layout: add a file on the left, then use **Quick analysis**, **Pivot table**, **Data Lab**, or the chat to explore it. Click **Load sample dataset** to try the tools right away.
 
-The API runs at http://localhost:8000 and its interactive docs are at http://localhost:8000/docs. The Gemini AI key is optional; without it, the dashboard still runs with AI features disabled.
+- **Quick analysis** explains row counts, blank cells, repeated rows, and simple number summaries.
+- **Pivot table** lets you choose row groups, optional column groups, and totals, averages, counts, lows, or highs. Download the result as CSV.
+- **Data chat** includes starter questions and remembers recent turns so follow-up questions make sense.
+- **Data Lab** keeps file cleaning, sorting, filtering, and chart building in one screen.
 
-To enable Gemini, copy `.env.example` to `.env` and add your key. Keep `.env` private; it is excluded from Git.
+The API runs at http://localhost:8000 and its interactive docs are at http://localhost:8000/docs. The Gemini AI key is optional; without it, charts, pivot tables, cleaning, exports, and quick summaries still work. The chat uses Gemini when a key is configured.
+
+To enable Gemini, copy `.env.example` to `.env` and add your key. The default model is `gemini-3.8-flash`; you can change `GEMINI_MODEL` in `.env`. Keep `.env` private; it is excluded from Git.
 
 ## Run manually
 
@@ -41,6 +46,8 @@ $env:API_URL = 'http://127.0.0.1:8000'
 ## Docker
 
 Copy `.env.example` to `.env`, then run `docker compose up --build`. The dashboard is on port 8501 and the API is on port 8000.
+
+
 
 
 
