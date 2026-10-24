@@ -69,7 +69,11 @@ st.markdown(
     }
     .stButton > button:hover, .stDownloadButton > button:hover { border-color:var(--dl-blue); color:var(--dl-blue); }
     button[kind="primary"] { background:#1f2430 !important; color:#fff !important; border-color:#1f2430 !important; }
-    div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] { border:1px solid var(--dl-line); border-radius:8px; overflow:hidden; background:#fff; }
+    .dl-table-scroll { overflow:auto; max-height:340px; border:1px solid var(--dl-line); border-radius:8px; background:#fff; }
+    .dl-data-table { width:100%; border-collapse:collapse; font-size:12px; color:var(--dl-text); }
+    .dl-data-table th { position:sticky; top:0; background:#f8f9fb; text-align:left; font-weight:650; }
+    .dl-data-table th, .dl-data-table td { padding:7px 10px; border-bottom:1px solid var(--dl-line); white-space:nowrap; }
+    .dl-data-table tr:nth-child(even) { background:#fafbfc; }
     div[data-testid="stPlotlyChart"] { border:1px solid var(--dl-line); border-radius:9px; overflow:hidden; background:#fff; padding:5px; }
     div[data-testid="stAlert"] { border-radius:8px; }
     @media (max-width: 900px) {
@@ -444,37 +448,14 @@ if page == "Dashboard":
                     st.rerun()
 
             with table_column:
-                if st.button("Select all preview rows", use_container_width=True):
-                    st.session_state["row_selection_default"] = True
-                    st.session_state.pop("datalens_table_editor", None)
-                    st.rerun()
-                if st.button("Clear preview selection", use_container_width=True):
-                    st.session_state["row_selection_default"] = False
-                    st.session_state.pop("datalens_table_editor", None)
-                    st.rerun()
                 st.markdown(
                     f'<div class="dl-muted" style="text-align:right;padding:6px 0">Preview · first {min(len(df), 200):,} rows</div>',
                     unsafe_allow_html=True,
                 )
-                preview = df.head(200).copy()
-                preview.insert(0, "Include", st.session_state.row_selection_default)
-                edited_preview = st.data_editor(
-                    preview,
-                    key="datalens_table_editor",
-                    column_config={"Include": st.column_config.CheckboxColumn("Include in chart")},
-                    disabled=[column for column in preview.columns if column != "Include"],
-                    hide_index=True,
-                    height=285,
-                    use_container_width=True,
-                )
-                selected = edited_preview["Include"].fillna(False).astype(bool)
-                selected_count = int(selected.sum())
-                if selected_count < len(edited_preview):
-                    chart_df = edited_preview.loc[selected, df.columns].copy()
-                    chart_scope = f"{selected_count:,} selected preview rows"
-                else:
-                    chart_df = df
-                    chart_scope = f"All {len(df):,} rows"
+                preview = df.head(200).to_html(index=False, border=0, classes="dl-data-table")
+                st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
+                chart_df = df
+                chart_scope = f"All {len(df):,} rows"
 
             chart_df = chart_df if df is not None else None
             if chart_df is None or chart_df.empty:
@@ -598,7 +579,8 @@ elif page == "Data Lab":
         else:
             lab_fig = px.histogram(df, x=lab_x, template="plotly_white")
         st.plotly_chart(lab_fig, use_container_width=True)
-        st.dataframe(df.head(500), use_container_width=True, height=340)
+        preview = df.head(500).to_html(index=False, border=0, classes="dl-data-table")
+        st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
 
 elif page == "Ask Aurlex":
     if df is None:
@@ -617,12 +599,15 @@ elif page == "Reports":
     else:
         render_downloads(df, st.session_state.table_name)
         st.markdown("#### Dataset preview")
-        st.dataframe(df.head(500), use_container_width=True)
+        preview = df.head(500).to_html(index=False, border=0, classes="dl-data-table")
+        st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
 
 else:
     st.markdown(
         '<div class="dl-card"><div class="dl-card-title">Data connectors</div><p class="dl-muted">The connector view is a placeholder. The current dashboard supports local file uploads and multi-file merges.</p></div>',
         unsafe_allow_html=True,
     )
+
+
 
 
