@@ -19,9 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.analytics import build_pivot, make_basic_answer, summarize_dataframe
+from backend.reporting import build_pdf_report
 
 st.set_page_config(
-    page_title="Aurlex Insights",
+    page_title="Volara Data Analyst",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -106,6 +107,7 @@ DEFAULTS = {
     ],
     "row_selection_default": True,
     "loaded_upload_fingerprint": None,
+    "dark_mode": False,
 }
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -248,13 +250,16 @@ def render_downloads(dataframe, table_name, key_prefix="exports"):
     safe_name = table_name if table_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name) else "uploaded_data"
     export_cols = ", ".join(f'"{column}"' for column in dataframe.columns)
     sql_text = f'SELECT {export_cols} FROM "{safe_name}";\n'
-    buttons = st.columns(3, gap="small")
+    pdf_bytes = build_pdf_report(dataframe, table_name)
+    buttons = st.columns(4, gap="small")
     with buttons[0]:
         st.download_button("Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"{key_prefix}_excel")
     with buttons[1]:
         st.download_button("Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True, key=f"{key_prefix}_csv")
     with buttons[2]:
         st.download_button("Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True, key=f"{key_prefix}_sql")
+    with buttons[3]:
+        st.download_button("Dashboard PDF", pdf_bytes, "volara_dashboard.pdf", "application/pdf", use_container_width=True, key=f"{key_prefix}_pdf")
 
 
 def run_clean(dataframe, api_health):
@@ -293,7 +298,7 @@ api_health = api_status()
 
 with st.sidebar:
     st.markdown(
-        '<div class="dl-brand"><div class="dl-mark">A</div><div><div class="dl-brand-name">Aurlex Insights</div><div class="dl-brand-sub">Visual data workspace</div></div></div>',
+        '<div class="dl-brand"><div class="dl-mark">V</div><div><div class="dl-brand-name">Volara Data Analyst</div><div class="dl-brand-sub">Visual data workspace</div></div></div>',
         unsafe_allow_html=True,
     )
     st.markdown('<div class="dl-section">Add data source</div>', unsafe_allow_html=True)
@@ -330,10 +335,24 @@ with st.sidebar:
         st.caption("No files loaded")
 
     st.markdown('<div class="dl-section">Workspace</div>', unsafe_allow_html=True)
-    pages = ["Dashboard", "Quick analysis", "Pivot table", "Data Lab", "Ask Aurlex", "Reports", "Connectors"]
+    pages = ["Dashboard", "Quick analysis", "Pivot table", "Data Lab", "Ask Volara", "Reports", "Connectors"]
     if st.session_state.page not in pages:
         st.session_state.page = "Dashboard"
     st.radio("Open workspace", pages, key="page", label_visibility="collapsed")
+
+    st.checkbox("Dark theme", key="dark_mode")
+    if st.session_state.dark_mode:
+        st.markdown("""
+        <style>
+        :root { --dl-bg:#17191f; --dl-panel:#22252d; --dl-line:#373b46; --dl-text:#edf0f6; --dl-muted:#a4abba; }
+        [data-testid="stAppViewContainer"], .stApp { background:#17191f; color:#edf0f6; }
+        [data-testid="stSidebar"] { background:#22252d; }
+        .dl-card, .dl-table-scroll, div[data-testid="stPlotlyChart"] { background:#22252d !important; }
+        .dl-data-table, .dl-data-table th, .dl-data-table td { color:#edf0f6; background:#22252d; }
+        .dl-data-table th { background:#2c303a; }
+        .dl-msg.bot { background:#2c303a; color:#edf0f6; }
+        </style>
+        """, unsafe_allow_html=True)
 
     st.markdown('<div class="dl-section">Connection</div>', unsafe_allow_html=True)
     if api_health:
@@ -408,7 +427,7 @@ page = st.session_state.page
 header, exports = st.columns([2.3, 1.7], gap="small")
 with header:
     st.markdown(
-        f'<div class="dl-topbar"><div><div class="dl-title">Aurlex Insights · {html.escape(page)}</div><div class="dl-subtitle">{html.escape(st.session_state.workspace)} · {html.escape(str(st.session_state.table_name or "No dataset"))} · {len(df) if df is not None else 0:,} rows</div></div></div>',
+        f'<div class="dl-topbar"><div><div class="dl-title">Volara Data Analyst · {html.escape(page)}</div><div class="dl-subtitle">{html.escape(st.session_state.workspace)} · {html.escape(str(st.session_state.table_name or "No dataset"))} · {len(df) if df is not None else 0:,} rows</div></div></div>',
         unsafe_allow_html=True,
     )
 with exports:
@@ -426,6 +445,14 @@ if page == "Dashboard":
                 )
             st.info("Supported files include CSV, Excel, SQL/SQLite, JSON, and Parquet.")
         else:
+            # A report-style KPI strip gives the dashboard a quick, readable overview.
+            kpi_cols = st.columns(4)
+            kpi_cols[0].metric("Rows", f"{len(df):,}")
+            kpi_cols[1].metric("Columns", f"{len(df.columns):,}")
+            missing_count = int(df.isna().sum().sum())
+            kpi_cols[2].metric("Missing values", f"{missing_count:,}")
+            duplicate_count = int(df.duplicated().sum())
+            kpi_cols[3].metric("Duplicate rows", f"{duplicate_count:,}")
             control_column, table_column = st.columns([0.82, 2.5], gap="small")
             with control_column:
                 st.markdown('<div class="dl-section">Chart type</div>', unsafe_allow_html=True)
@@ -442,9 +469,20 @@ if page == "Dashboard":
                 )
                 metric_options = ["Rows"] + numeric_cols
                 metric = st.selectbox("Metric", metric_options, key="dl_metric")
+                filter_column = st.selectbox("Filter field", ["All values"] + df.columns.tolist(), key="dashboard_filter_column")
+                chart_df = df
+                if filter_column != "All values":
+                    filter_values = sorted(df[filter_column].dropna().astype(str).unique().tolist())
+                    selected_values = st.multiselect("Keep values", filter_values, key="dashboard_filter_values")
+                    if selected_values:
+                        chart_df = df[df[filter_column].astype(str).isin(selected_values)]
                 if st.button("Auto clean", use_container_width=True):
                     run_clean(df, api_health)
                     st.rerun()
+
+                with st.expander("Fields", expanded=False):
+                    for field in df.columns:
+                        st.caption(f"▦ {field} · {df[field].dtype}")
 
             with table_column:
                 st.markdown(
@@ -453,8 +491,7 @@ if page == "Dashboard":
                 )
                 preview = df.head(200).to_html(index=False, border=0, classes="dl-data-table")
                 st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
-                chart_df = df
-                chart_scope = f"All {len(df):,} rows"
+                chart_scope = f"{len(chart_df):,} filtered rows" if len(chart_df) != len(df) else f"All {len(df):,} rows"
 
             chart_df = chart_df if df is not None else None
             if chart_df is None or chart_df.empty:
@@ -505,7 +542,7 @@ if page == "Dashboard":
                         st.download_button(
                             "Export chart",
                             figure.to_html(full_html=True, include_plotlyjs="cdn"),
-                            "aurlex_dashboard.html",
+                            "volara_dashboard.html",
                             "text/html",
                             use_container_width=True,
                         )
@@ -679,7 +716,7 @@ elif page == "Data Lab":
         preview = df.head(500).to_html(index=False, border=0, classes="dl-data-table")
         st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
 
-elif page == "Ask Aurlex":
+elif page == "Ask Volara":
     if df is None:
         st.info("Load a dataset from the left to ask questions.")
     else:
