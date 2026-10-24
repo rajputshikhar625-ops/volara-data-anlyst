@@ -15,7 +15,7 @@ from .cleaner import cleaner
 load_dotenv()
 
 app = FastAPI(
-    title="Aurlex Insights API",
+    title="Volara Data Analyst API",
     version="2.0.0",
     description="Multi-file, cleaning, filtering, disambiguation - DuckDB + Gemini"
 )
