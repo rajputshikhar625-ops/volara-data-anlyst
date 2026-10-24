@@ -2,6 +2,7 @@ import html
 import io
 import os
 import re
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -11,11 +12,13 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
-from backend.analytics import build_pivot, make_basic_answer, summarize_dataframe
-
 load_dotenv()
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.analytics import build_pivot, make_basic_answer, summarize_dataframe
 
 st.set_page_config(
     page_title="Aurlex Insights",
@@ -701,6 +704,8 @@ else:
         '<div class="dl-card"><div class="dl-card-title">Data connectors</div><p class="dl-muted">The connector view is a placeholder. The current dashboard supports local file uploads and multi-file merges.</p></div>',
         unsafe_allow_html=True,
     )
+
+
 
 
 
