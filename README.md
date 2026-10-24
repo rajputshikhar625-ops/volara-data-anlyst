@@ -15,7 +15,7 @@ This package uses the v2.1 full-stack app: a FastAPI backend with a Streamlit da
 3. Double-click `RUN_AURLEX_INSIGHTS.bat`.
 4. On first launch, it creates a local Python environment and installs the dependencies. It then opens the dashboard at http://localhost:8501.
 
-Use `sample_sales.csv` to try an upload after the dashboard opens.
+The dashboard now uses the DataLens-style layout: a data panel on the left, charts and a selectable data table in the center, and the Aurlex assistant on the right. Click **Load sample dataset** to explore immediately, or upload CSV/Excel files from the left panel.
 
 The API runs at http://localhost:8000 and its interactive docs are at http://localhost:8000/docs. The Gemini AI key is optional; without it, the dashboard still runs with AI features disabled.
 
@@ -41,3 +41,5 @@ $env:API_URL = 'http://127.0.0.1:8000'
 ## Docker
 
 Copy `.env.example` to `.env`, then run `docker compose up --build`. The dashboard is on port 8501 and the API is on port 8000.
+
+
