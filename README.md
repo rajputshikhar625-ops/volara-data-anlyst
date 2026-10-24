@@ -2,6 +2,16 @@
 
 Volara Data Analyst is a good, beginner-friendly, local-first workspace for exploring files, building dashboards, creating pivot tables, cleaning data, and asking questions in plain language. It pairs a FastAPI service with a Streamlit dashboard and keeps core analysis available when the API or AI service is offline.
 
+> **Current app:** the updated Dashboard Edition is on the `main` branch. Its entry point is [`frontend/app.py`](frontend/app.py), and the Windows start file is [`RUN_VOLARA_DATA_ANALYST.bat`](RUN_VOLARA_DATA_ANALYST.bat). Use this launcher to open the current version.
+
+## What is included in the current dashboard
+
+- Dashboard summary cards, column/horizontal/pie charts, category filters, a fields list, a data preview, and a data chat.
+- Quick analysis, pivot tables, data cleaning and filtering, reports, and Excel, CSV, SQL, PDF, and chart exports.
+- Optional Gemini answers. File analysis, pivots, charts, and exports also work without Gemini.
+
+The Google Sheets and database Connectors page is a placeholder; those external connections are not enabled yet.
+
 ## Compare the versions
 
 - Existing Aurlex files and workflows remain available in this project; Volara Data Analyst is the current product name.
@@ -26,6 +36,10 @@ The dashboard uses a guided report layout: add a file on the left, then use **Da
 The API runs at http://localhost:8000 and its interactive docs are at http://localhost:8000/docs. The Gemini AI key is optional; without it, charts, pivot tables, cleaning, exports, and quick summaries still work. The chat uses Gemini when a key is configured.
 
 To enable Gemini, copy `.env.example` to `.env` and add your key. Keep `.env` private; it is excluded from Git.
+
+## Run the checks
+
+After installing the dependencies, run `python -m unittest discover -s tests -v` from this folder. The tests cover the dashboard pages, chart filters, pivot logic, PDF generation, and Gemini model fallback.
 
 ## Run manually
 
