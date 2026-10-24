@@ -1,4 +1,4 @@
-"""Launch Aurlex Insights with either an installed venv or the local bundled-Python fallback."""
+"""Launch Volara Data Analyst with the installed venv or local bundled-Python fallback."""
 from pathlib import Path
 import os
 import sys
