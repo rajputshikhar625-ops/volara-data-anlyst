@@ -31,6 +31,7 @@ class FrontendSmokeTests(unittest.TestCase):
         app.radio(key="dl_chart_type").set_value("Pie chart").run()
         app.selectbox(key="dashboard_filter_column").set_value("region").run()
         app.multiselect(key="dashboard_filter_values").select("North").run()
+        self.assertTrue(any("2 filtered rows" in str(item.value) for item in app.markdown))
         app.checkbox[0].check().run()
         self.assertEqual(list(app.exception), [])
         app.session_state["page"] = "Reports"
