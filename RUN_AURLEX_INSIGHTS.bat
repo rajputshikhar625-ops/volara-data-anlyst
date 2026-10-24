@@ -34,7 +34,7 @@ if not defined EMBEDDED_MODE if not exist ".venv\Scripts\python.exe" (
 if defined EMBEDDED_MODE (
   if not exist ".runtime" mkdir .runtime
   echo Installing dependencies for this app...
-  "%PYTHON_CMD%" -m pip install --disable-pip-version-check --target .runtime -r requirements.txt
+  "%PYTHON_CMD%" -m pip install --disable-pip-version-check --upgrade --target .runtime -r requirements.txt
   if errorlevel 1 goto :failed
 ) else (
   echo Installing or checking app dependencies...
@@ -54,3 +54,5 @@ exit /b 0
 echo Setup failed. Check the error above and confirm Python and internet access are available.
 pause
 exit /b 1
+
+
