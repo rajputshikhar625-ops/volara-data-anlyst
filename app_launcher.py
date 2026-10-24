@@ -6,6 +6,7 @@ import sys
 ROOT = Path(__file__).resolve().parent
 RUNTIME = ROOT / ".runtime"
 os.chdir(ROOT)
+sys.path.insert(0, str(ROOT))
 if RUNTIME.is_dir():
     sys.path.insert(0, str(RUNTIME))
 
@@ -22,3 +23,5 @@ else:
         "--server.address=127.0.0.1", "--server.port=8501",
     ]
     main()
+
+
