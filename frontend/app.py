@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from backend.analytics import build_pivot, make_basic_answer, summarize_dataframe
 from backend.reporting import build_pdf_report
+from backend.uploads import read_uploaded_dataframe
 
 st.set_page_config(
     page_title="Volara Data Analyst",
@@ -122,6 +123,8 @@ DEFAULTS = {
     "dashboard_charts": [],
     "dashboard_initialized": False,
     "builder_upload_fingerprint": None,
+    "overview_chart_color": "#2563eb",
+    "lab_chart_color": "#2563eb",
 }
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -139,20 +142,7 @@ def api_status():
 
 
 def read_uploaded(file_obj):
-    name = file_obj.name.lower()
-    content = file_obj.getvalue()
-    if name.endswith(".csv"):
-        try:
-            return pd.read_csv(io.BytesIO(content))
-        except UnicodeDecodeError:
-            return pd.read_csv(io.BytesIO(content), encoding="latin1")
-    if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(io.BytesIO(content))
-    if name.endswith(".parquet"):
-        return pd.read_parquet(io.BytesIO(content))
-    if name.endswith(".json"):
-        return pd.read_json(io.BytesIO(content))
-    return None
+    return read_uploaded_dataframe(file_obj.name, file_obj.getvalue())
 
 
 def clear_row_selection():
@@ -176,6 +166,7 @@ def _default_dashboard_charts(dataframe, dataset_name):
             "group": group,
             "measure": measure,
             "aggregation": "Sum" if measure else "Count",
+            "color": ["#2563eb", "#16a34a", "#f59e0b"][index - 1],
             "span": 6,
         })
     return charts
@@ -199,7 +190,12 @@ def set_dataset(dataframe, table_name=None, sources=None, fingerprint=None):
 def backend_upload(file_obj):
     files = {"file": (file_obj.name, file_obj.getvalue(), file_obj.type or "application/octet-stream")}
     response = requests.post(f"{API_URL}/api/upload", files=files, timeout=35)
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise requests.HTTPError(f"Upload API returned {response.status_code}: {detail}", response=response)
     return response.json()
 
 
@@ -210,7 +206,12 @@ def backend_multi_upload(files, merge_how):
         files=payload,
         timeout=45,
     )
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise requests.HTTPError(f"Multi-file upload API returned {response.status_code}: {detail}", response=response)
     return response.json()
 
 
@@ -322,6 +323,7 @@ def add_dashboard_chart(chart_type, dataset_name=None):
         "id": next_id, "title": f"{chart_type.title()} chart · {group}", "dataset": dataset_name,
         "type": chart_type, "group": group, "measure": measure,
         "aggregation": "Sum" if measure else "Count", "span": 6,
+        "color": ["#2563eb", "#16a34a", "#f59e0b"][next_id % 3],
     })
     st.session_state.report_page = "Dashboard"
 
@@ -339,17 +341,18 @@ def _aggregate_dashboard_chart(dataframe, group, measure, aggregation):
     return result.sort_values("value", ascending=False).head(20)
 
 
-def _dashboard_chart_figure(dataframe, chart_type, group, measure, aggregation, height=310):
+def _dashboard_chart_figure(dataframe, chart_type, group, measure, aggregation, height=310, accent_color="#2563eb"):
     grouped = _aggregate_dashboard_chart(dataframe, group, measure, aggregation)
     if grouped.empty:
         return None
     label = measure if aggregation != "Count" and measure else "Rows"
     if chart_type in {"donut", "Pie chart"}:
-        figure = px.pie(grouped, names=group, values="value", hole=0.48, color_discrete_sequence=px.colors.qualitative.Safe)
+        palette = [accent_color] + [color for color in px.colors.qualitative.Safe if color.lower() != accent_color.lower()]
+        figure = px.pie(grouped, names=group, values="value", hole=0.48, color_discrete_sequence=palette)
     elif chart_type in {"bar", "Horizontal chart"}:
-        figure = px.bar(grouped.sort_values("value"), x="value", y=group, orientation="h", color_discrete_sequence=["#16a34a"])
+        figure = px.bar(grouped.sort_values("value"), x="value", y=group, orientation="h", color_discrete_sequence=[accent_color])
     else:
-        figure = px.bar(grouped, x=group, y="value", color_discrete_sequence=["#2563eb"])
+        figure = px.bar(grouped, x=group, y="value", color_discrete_sequence=[accent_color])
     figure.update_layout(
         template="plotly_white", paper_bgcolor="#ffffff", plot_bgcolor="#ffffff", height=height,
         margin=dict(l=12, r=12, t=22, b=18), showlegend=chart_type in {"donut", "Pie chart"},
@@ -402,10 +405,11 @@ def _render_builder_chart(spec, datasets, filter_column=None, filter_values=None
         initial_width = next((label for label, value in width_labels.items() if value == initial_span), "6 of 12")
         width_label = st.selectbox("Width", list(width_labels), index=list(width_labels).index(initial_width), key=f"builder_span_{chart_id}")
         span = width_labels[width_label]
+        accent_color = st.color_picker("Chart color", value=spec.get("color", "#2563eb"), key=f"builder_color_{chart_id}")
         spec.update({"title": title, "dataset": dataset_name, "group": group, "type": chart_type,
-                     "measure": "" if measure == "Count" else measure, "aggregation": aggregation, "span": span})
+                     "measure": "" if measure == "Count" else measure, "aggregation": aggregation, "span": span, "color": accent_color})
         chart_frame = available
-        figure = _dashboard_chart_figure(chart_frame, chart_type, group, "" if measure == "Count" else measure, aggregation)
+        figure = _dashboard_chart_figure(chart_frame, chart_type, group, "" if measure == "Count" else measure, aggregation, accent_color=accent_color)
         if figure is not None:
             st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False}, key=f"builder_plot_{chart_id}")
             st.caption(f"{len(chart_frame):,} rows · {aggregation} · {group}")
@@ -439,19 +443,16 @@ def render_report_designer(dataframe, table_name, api_health):
     st.markdown("## Volara Data Analyst <span style='color:#2563eb'>· Report Designer</span>", unsafe_allow_html=True)
     ribbon = st.radio("Report ribbon", ["Home", "Insert", "View"], horizontal=True, key="report_ribbon", label_visibility="collapsed")
     if ribbon == "Home":
-        actions = st.columns([1, 1, 1, 2.6], gap="small")
+        actions = st.columns([1, 1, 2.6], gap="small")
         with actions[0]:
             if st.button("Sample data", use_container_width=True, key="designer_sample"):
                 load_sample(api_health)
                 st.rerun()
         with actions[1]:
-            if st.button("Select all", use_container_width=True, key="designer_select_all"):
-                st.session_state.report_selection_action = "all"
-        with actions[2]:
             action = st.selectbox("Selection", ["Select all", "Clear", "Invert"], key="designer_selection_action")
             if st.button("Apply", use_container_width=True, key="designer_apply_selection"):
                 st.session_state.report_selection_action = {"Select all": "all", "Clear": "none", "Invert": "invert"}[action]
-        with actions[3]:
+        with actions[2]:
             import_file = st.file_uploader("Import CSV", type=["csv"], key="designer_import_csv", label_visibility="collapsed")
             if import_file:
                 fingerprint = (import_file.name, len(import_file.getvalue()))
@@ -549,6 +550,7 @@ def render_report_designer(dataframe, table_name, api_health):
                     st.radio("Chart type", ["Column chart", "Horizontal chart", "Pie chart"], key="dl_chart_type")
                     st.selectbox("Axis", category_options, index=category_options.index(active_category), key="dl_category")
                     st.selectbox("Measure", ["Rows"] + numeric, index=(["Rows"] + numeric).index(active_metric), key="dl_metric")
+                    st.color_picker("Chart color", key="overview_chart_color")
             elif right_tab == "Filters":
                 st.markdown("#### Filters on this page")
                 filter_column = st.selectbox("Filter field", ["All fields"] + dataframe.columns.tolist(), key="dashboard_filter_column")
@@ -599,7 +601,8 @@ def render_report_designer(dataframe, table_name, api_health):
             measure = st.session_state.get("dl_metric", active_metric)
             if axis in filtered.columns:
                 figure = _dashboard_chart_figure(filtered, chart_type, axis, "" if measure == "Rows" else measure,
-                                                 "Count" if measure == "Rows" else "Sum", height=400)
+                                                 "Count" if measure == "Rows" else "Sum", height=400,
+                                                 accent_color=st.session_state.overview_chart_color)
                 line = f"{len(filtered):,} filtered rows" if filter_values else f"All {len(filtered):,} rows"
                 st.markdown(f"**{html.escape(str(measure))} by {html.escape(str(axis))}** · {line}")
                 if figure is not None:
@@ -729,7 +732,7 @@ with st.sidebar:
     st.markdown('<div class="dl-section">Add data source</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader(
         "Excel, CSV, SQL, SQLite, JSON, or Parquet",
-        type=["csv", "xlsx", "xls", "sql", "db", "sqlite", "json", "parquet"],
+        type=["csv", "xlsx", "xlsm", "xls", "sql", "db", "sqlite", "json", "parquet"],
         label_visibility="collapsed",
         key="single",
     )
@@ -781,30 +784,30 @@ if multi_files and len(multi_files) >= 2:
     fingerprint = ("multi", tuple((file.name, len(file.getvalue())) for file in multi_files))
     if fingerprint != st.session_state.loaded_upload_fingerprint:
         try:
+            api_warning = None
+            table_name = "local_dataset"
             parsed = [read_uploaded(file) for file in multi_files]
             if any(frame is None for frame in parsed):
                 raise ValueError("Multi-file merge supports CSV, Excel, and Parquet.")
             if api_health:
-                result = backend_multi_upload(multi_files, merge_how)
-                if result.get("mode") == "separate":
-                    frames = parsed[:1]
-                    table_name = result["tables"][0]["table"]
-                else:
-                    frames = parsed
-                    table_name = result["table_name"]
-                dataframe = pd.concat(frames, ignore_index=True, sort=False)
-                if merge_how == "union":
-                    dataframe = dataframe.drop_duplicates()
-            elif merge_how == "separate":
+                try:
+                    result = backend_multi_upload(multi_files, merge_how)
+                    table_name = result["tables"][0]["table"] if result.get("mode") == "separate" else result["table_name"]
+                except requests.RequestException as exc:
+                    api_warning = str(exc)
+                    table_name = "local_dataset"
+            if merge_how == "separate":
                 dataframe = parsed[0]
-                table_name = "local_dataset"
             else:
                 dataframe = pd.concat(parsed, ignore_index=True, sort=False)
                 if merge_how == "union":
                     dataframe = dataframe.drop_duplicates()
-                table_name = "local_dataset"
+                if not api_health or api_warning:
+                    table_name = "local_dataset"
             set_dataset(dataframe, table_name, [file.name for file in multi_files], fingerprint)
             st.toast(f"Loaded {len(multi_files)} files · {len(dataframe):,} rows")
+            if api_warning:
+                st.warning(f"Loaded the files locally, but the backend rejected them: {api_warning}")
         except Exception as exc:
             st.error(f"Could not load files: {exc}")
 elif uploaded_file:
@@ -814,14 +817,23 @@ elif uploaded_file:
             table_name = "local_dataset"
             dataframe = read_uploaded(uploaded_file)
             if api_health:
-                result = backend_upload(uploaded_file)
-                table_name = result["table_name"]
-                if dataframe is None:
-                    dataframe = pd.DataFrame(result.get("preview", []))
+                try:
+                    result = backend_upload(uploaded_file)
+                    table_name = result["table_name"]
+                    if dataframe is None:
+                        dataframe = pd.DataFrame(result.get("preview", []))
+                except requests.RequestException as exc:
+                    if dataframe is None:
+                        raise RuntimeError(f"The backend rejected the file and no local reader is available: {exc}") from exc
+                    api_warning = str(exc)
+            else:
+                api_warning = None
             if dataframe is None:
-                raise ValueError("This file type needs the API. Start the app with RUN_AURLEX_INSIGHTS.bat and try again.")
+                raise ValueError("This file type needs the backend. Start both services with RUN_VOLARA_DATA_ANALYST.bat and try again.")
             set_dataset(dataframe, table_name, [uploaded_file.name], fingerprint)
             st.toast(f"Loaded {len(dataframe):,} rows")
+            if api_warning:
+                st.warning(f"Loaded this file locally, but the backend rejected it: {api_warning}")
         except Exception as exc:
             st.error(f"Could not load file: {exc}")
 
@@ -955,23 +967,25 @@ elif page == "Data Lab":
             set_dataset(filtered.reset_index(drop=True), st.session_state.table_name, st.session_state.source_files, st.session_state.loaded_upload_fingerprint)
             st.rerun()
 
-        chart_columns = st.columns(3)
+        chart_columns = st.columns(4)
         with chart_columns[0]:
             lab_type = st.selectbox("Chart", ["Bar", "Line", "Area", "Scatter", "Histogram"], key="lab_type")
         with chart_columns[1]:
             lab_x = st.selectbox("X axis", df.columns.tolist(), key="lab_x")
         with chart_columns[2]:
             lab_y = st.selectbox("Y axis", numeric_cols or df.columns.tolist(), key="lab_y")
+        with chart_columns[3]:
+            lab_color = st.color_picker("Chart color", key="lab_chart_color")
         if lab_type == "Bar":
-            lab_fig = px.bar(df, x=lab_x, y=lab_y, template="plotly_white")
+            lab_fig = px.bar(df, x=lab_x, y=lab_y, template="plotly_white", color_discrete_sequence=[lab_color])
         elif lab_type == "Line":
-            lab_fig = px.line(df, x=lab_x, y=lab_y, template="plotly_white")
+            lab_fig = px.line(df, x=lab_x, y=lab_y, template="plotly_white", color_discrete_sequence=[lab_color])
         elif lab_type == "Area":
-            lab_fig = px.area(df, x=lab_x, y=lab_y, template="plotly_white")
+            lab_fig = px.area(df, x=lab_x, y=lab_y, template="plotly_white", color_discrete_sequence=[lab_color])
         elif lab_type == "Scatter":
-            lab_fig = px.scatter(df, x=lab_x, y=lab_y, template="plotly_white")
+            lab_fig = px.scatter(df, x=lab_x, y=lab_y, template="plotly_white", color_discrete_sequence=[lab_color])
         else:
-            lab_fig = px.histogram(df, x=lab_x, template="plotly_white")
+            lab_fig = px.histogram(df, x=lab_x, template="plotly_white", color_discrete_sequence=[lab_color])
         st.plotly_chart(lab_fig, use_container_width=True)
         preview = df.head(500).to_html(index=False, border=0, classes="dl-data-table")
         st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
