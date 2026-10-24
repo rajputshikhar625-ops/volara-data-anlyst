@@ -1,6 +1,6 @@
 # Volara Data Analyst
 
-Volara Data Analyst is a friendly, local-first workspace for exploring files, building dashboards, creating pivot tables, cleaning data, and asking questions in plain language. It pairs a FastAPI service with a Streamlit dashboard and keeps core analysis available when the API or AI service is offline.
+Volara Data Analyst is a good, beginner-friendly, local-first workspace for exploring files, building dashboards, creating pivot tables, cleaning data, and asking questions in plain language. It pairs a FastAPI service with a Streamlit dashboard and keeps core analysis available when the API or AI service is offline.
 
 ## Compare the versions
 
