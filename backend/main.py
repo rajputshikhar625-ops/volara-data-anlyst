@@ -32,6 +32,7 @@ class NaturalLanguageQuery(BaseModel):
     query: str = Field(..., min_length=2, max_length=2000)
     table_name: str = Field(..., pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
     disambiguation_context: Optional[Dict[str, str]] = None
+    chat_history: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
 
 class SQLExecuteRequest(BaseModel):
     sql: str = Field(..., min_length=6)
@@ -264,7 +265,7 @@ async def ai_query(payload: NaturalLanguageQuery):
         if payload.disambiguation_context:
             extra_ctx = f"\nDisambiguation context provided by user: {payload.disambiguation_context}"
         
-        sql_query = ai_engine.text_to_sql(payload.table_name, schema_str, payload.query + extra_ctx)
+        sql_query = ai_engine.text_to_sql(payload.table_name, schema_str, payload.query + extra_ctx, payload.chat_history)
         result_df = db_manager.execute_query(sql_query)
         insight = ai_engine.generate_insight(result_df.head(10).to_string(), payload.query)
 
@@ -302,8 +303,11 @@ def get_schema(table_name: str):
 def health_check():
     return {
         "status": "healthy",
-        "engine": "DuckDB 0.10.0 + Gemini 1.5 Flash",
+        "engine": f"DuckDB 0.10.0 + {ai_engine.model_name}",
         "ai_enabled": ai_engine.enabled,
         "tables_loaded": len(db_manager.list_tables()),
         "version": "2.1.0 - multi-upload + cleaning + disambiguation"
     }
+
+
+
