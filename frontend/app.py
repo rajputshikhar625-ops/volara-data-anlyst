@@ -637,15 +637,16 @@ def render_report_designer(dataframe, table_name, api_health):
             preview = table_frame.to_html(index=False, border=0, classes="dl-data-table")
             st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
         else:
-            builder_tools = st.columns([1, 1, 1, 1, 2], gap="small")
+            builder_tools = st.columns(3, gap="small")
             for column, chart_type, label in zip(builder_tools[:3], ["column", "bar", "donut"], ["+ Column chart", "+ Bar chart", "+ Donut chart"]):
                 with column:
                     if st.button(label, use_container_width=True, key=f"builder_add_{chart_type}"):
                         add_dashboard_chart(chart_type, str(table_name or next(iter(datasets), "")))
-            with builder_tools[3]:
+            management_tools = st.columns([1, 3], gap="small")
+            with management_tools[0]:
                 if st.button("Clear charts", use_container_width=True, key="builder_clear_charts"):
                     st.session_state.dashboard_charts = []
-            with builder_tools[4]:
+            with management_tools[1]:
                 imported_builder_file = st.file_uploader("Import CSV as dataset", type=["csv"], key="builder_dataset_upload")
             if imported_builder_file:
                 import_fingerprint = (imported_builder_file.name, len(imported_builder_file.getvalue()))
