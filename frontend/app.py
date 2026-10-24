@@ -11,6 +11,8 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
+from backend.analytics import build_pivot, make_basic_answer, summarize_dataframe
+
 load_dotenv()
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,30 +187,17 @@ def load_sample(api_health):
     st.toast("Sample sales data loaded")
 
 
-def answer_locally(question, dataframe, category, metric):
+def answer_locally(question, dataframe, category, metric, ai_busy=False):
     if dataframe is None:
         return "Upload a file or load the sample dataset first."
-    lower = question.lower()
-    response = f"Your dataset has {len(dataframe):,} rows and {len(dataframe.columns)} columns."
-    if metric and metric != "Rows" and metric in dataframe.columns:
-        response += f"\n\n{metric} totals {dataframe[metric].sum():,.2f} (average {dataframe[metric].mean():,.2f})."
-        if category and category in dataframe.columns:
-            summary = (
-                dataframe.groupby(category, dropna=False)[metric]
-                .sum()
-                .sort_values(ascending=False)
-                .head(5)
-            )
-            if "top" in lower or "highest" in lower or "most" in lower:
-                response += "\n\nTop groups:\n" + "\n".join(
-                    f"• {html.escape(str(label))}: {value:,.2f}"
-                    for label, value in summary.items()
-                )
-    response += "\n\nAdd GEMINI_API_KEY to enable natural-language AI queries."
+    response = make_basic_answer(question, dataframe, category, metric)
+    if ai_busy:
+        response += "\n\nGemini is busy right now, so this quick answer uses the data on this screen."
+    else:
+        response += "\n\nAdd a Gemini key to ask open-ended questions about your data."
     return response
 
-
-def answer_with_ai(question, dataframe, category, metric, api_health):
+def answer_with_ai(question, dataframe, category, metric, api_health, conversation_history=None):
     if dataframe is None:
         return "Upload a file or load the sample dataset first."
     if not api_health or not api_health.get("ai_enabled") or not st.session_state.table_name:
@@ -220,6 +209,7 @@ def answer_with_ai(question, dataframe, category, metric, api_health):
                 "query": question,
                 "table_name": st.session_state.table_name,
                 "disambiguation_context": st.session_state.disambig_ctx,
+                "chat_history": conversation_history or [],
             },
             timeout=45,
         )
@@ -227,15 +217,21 @@ def answer_with_ai(question, dataframe, category, metric, api_health):
         if response.ok and result.get("status") == "needs_clarification":
             return "\n".join(result.get("questions", ["Please clarify the query."]))
         if response.ok:
-            insight = result.get("insight", "Query complete.")
-            sql = result.get("sql_query", "")
-            return f"{insight}\n\nSQL: {sql}"
-        return result.get("detail", response.text)
+            insight = result.get("insight", "I found an answer.")
+            rows = result.get("data", [])
+            if rows:
+                answer_table = pd.DataFrame(rows).head(8).to_string(index=False)
+                return f"{insight}\n\nHere is what I found:\n{answer_table}"
+            return insight
+        detail = result.get("detail", response.text)
+        if "Gemini is busy or unavailable right now" in detail:
+            return answer_locally(question, dataframe, category, metric, ai_busy=True)
+        return detail
     except requests.RequestException as exc:
         return f"Could not reach the analysis API: {exc}"
 
 
-def render_downloads(dataframe, table_name):
+def render_downloads(dataframe, table_name, key_prefix="exports"):
     if dataframe is None:
         st.caption("Load data to enable exports.")
         return
@@ -251,11 +247,11 @@ def render_downloads(dataframe, table_name):
     sql_text = f'SELECT {export_cols} FROM "{safe_name}";\n'
     buttons = st.columns(3, gap="small")
     with buttons[0]:
-        st.download_button("Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button("Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"{key_prefix}_excel")
     with buttons[1]:
-        st.download_button("Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True)
+        st.download_button("Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True, key=f"{key_prefix}_csv")
     with buttons[2]:
-        st.download_button("Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True)
+        st.download_button("Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True, key=f"{key_prefix}_sql")
 
 
 def run_clean(dataframe, api_health):
@@ -331,7 +327,7 @@ with st.sidebar:
         st.caption("No files loaded")
 
     st.markdown('<div class="dl-section">Workspace</div>', unsafe_allow_html=True)
-    pages = ["Dashboard", "Data Lab", "Ask Aurlex", "Reports", "Connectors"]
+    pages = ["Dashboard", "Quick analysis", "Pivot table", "Data Lab", "Ask Aurlex", "Reports", "Connectors"]
     if st.session_state.page not in pages:
         st.session_state.page = "Dashboard"
     st.radio("Open workspace", pages, key="page", label_visibility="collapsed")
@@ -413,7 +409,7 @@ with header:
         unsafe_allow_html=True,
     )
 with exports:
-    render_downloads(df, st.session_state.table_name)
+    render_downloads(df, st.session_state.table_name, "top")
 
 if page == "Dashboard":
     main_column, chat_column = st.columns([2.55, 1], gap="medium")
@@ -511,13 +507,30 @@ if page == "Dashboard":
                             use_container_width=True,
                         )
                 if figure is None:
-                    st.info("No rows are selected. Select rows in the preview to redraw the chart.")
+                    st.info("No chart can be shown for this selection. Try another category or number.")
                 else:
                     st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
 
     with chat_column:
         st.markdown('<div class="dl-chat-head">AI Assistant</div>', unsafe_allow_html=True)
-        st.caption("Ask about the current dataset")
+        st.caption("Ask about the current dataset. Try one of these to get started:")
+        if df is not None:
+            easy_group = category if category else "group"
+            easy_measure = metric if metric and metric != "Rows" else "rows"
+        else:
+            easy_group, easy_measure = "group", "rows"
+        suggestions = [
+            "Give me a simple summary",
+            f"Which {easy_group} has the most {easy_measure}?",
+            f"Show me the top 5 {easy_group} groups by {easy_measure}.",
+        ]
+        for suggestion in suggestions:
+            if st.button(suggestion, key=f"chat_suggestion_{suggestion}", use_container_width=True, disabled=df is None):
+                history = list(st.session_state.messages[-6:])
+                st.session_state.messages.append({"role": "user", "content": suggestion})
+                reply = answer_with_ai(suggestion, df, category if df is not None else None, metric if df is not None else None, api_health, history)
+                st.session_state.messages.append({"role": "assistant", "content": reply})
+                st.rerun()
         messages_area = st.container()
         with messages_area:
             for message in st.session_state.messages[-12:]:
@@ -527,12 +540,93 @@ if page == "Dashboard":
         with st.form("datalens_chat_form", clear_on_submit=True):
             question = st.text_input("Ask about your data", placeholder="Ask about your data…", label_visibility="collapsed")
             send = st.form_submit_button("Send", use_container_width=True, type="primary")
-        if send:
+        if send and question.strip():
+            history = list(st.session_state.messages[-6:])
             st.session_state.messages.append({"role": "user", "content": question})
-            st.session_state.messages.append(
-                {"role": "assistant", "content": answer_with_ai(question, df, category if df is not None else None, metric if df is not None else None, api_health)}
-            )
+            reply = answer_with_ai(question, df, category if df is not None else None, metric if df is not None else None, api_health, history)
+            st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()
+
+elif page == "Quick analysis":
+    if df is None:
+        st.info("Choose a file on the left or load the sample to get a friendly summary.")
+    else:
+        summary = summarize_dataframe(df)
+        st.markdown("### Here is your data, in simple words")
+        st.caption("A quick check of how much data you have and what it contains.")
+        cards = st.columns(4)
+        for col, label, value in zip(
+            cards,
+            ["Rows", "Columns", "Blank cells", "Repeated rows"],
+            [summary["rows"], summary["columns"], summary["missing_cells"], summary["duplicate_rows"]],
+        ):
+            with col:
+                st.metric(label, f"{value:,}")
+
+        if summary["numeric"]:
+            measure = st.selectbox("Pick a number to explore", list(summary["numeric"]), key="quick_metric")
+            numbers = summary["numeric"][measure]
+            st.markdown(f"### What do the numbers say about {html.escape(measure)}?")
+            stats = st.columns(4)
+            for col, label, value in zip(
+                stats,
+                ["Total", "Average", "Highest", "Lowest"],
+                [numbers["total"], numbers["average"], numbers["highest"], numbers["lowest"]],
+            ):
+                with col:
+                    st.metric(label, f"{value:,.2f}")
+
+        group_fields = [column for column in df.columns if column not in numeric_cols]
+        if group_fields:
+            group_field = st.selectbox("See which group appears most", group_fields, key="quick_group")
+            counts = df[group_field].fillna("Blank").astype(str).value_counts().head(8)
+            if not counts.empty:
+                group_figure = px.bar(
+                    x=counts.values,
+                    y=counts.index,
+                    orientation="h",
+                    labels={"x": "Rows", "y": group_field},
+                    title=f"Most common {group_field}",
+                    color_discrete_sequence=["#2563eb"],
+                )
+                group_figure.update_layout(template="plotly_white", height=350, margin=dict(l=12, r=12, t=45, b=12))
+                st.plotly_chart(group_figure, use_container_width=True)
+        else:
+            st.info("This file has no text groups to compare yet. You can still explore its number summaries.")
+
+elif page == "Pivot table":
+    if df is None:
+        st.info("Load a dataset first. Then choose what to group and compare.")
+    else:
+        st.markdown("### Build a pivot table")
+        st.caption("Choose a row group, an optional column group, and what number to calculate. The table updates automatically.")
+        controls = st.columns(4, gap="small")
+        with controls[0]:
+            row_field = st.selectbox("Group rows by", df.columns.tolist(), key="pivot_rows")
+        with controls[1]:
+            column_field_label = st.selectbox("Compare across", ["No columns"] + df.columns.tolist(), key="pivot_columns")
+        with controls[2]:
+            value_field = st.selectbox("Number to summarize", ["Count rows"] + numeric_cols, key="pivot_value")
+        with controls[3]:
+            aggregation = st.selectbox("Calculate", ["Sum", "Average", "Count", "Lowest", "Highest"], key="pivot_aggregation")
+
+        column_field = None if column_field_label == "No columns" else column_field_label
+        value_column = None if value_field == "Count rows" else value_field
+        pivot_aggregation = "Count" if value_column is None else aggregation
+        try:
+            pivot = build_pivot(df, row_field, column_field, value_column, pivot_aggregation)
+            if pivot.empty:
+                st.info("No matching rows yet. Try a different group.")
+            else:
+                shown_aggregation = "Count" if value_column is None else aggregation
+                st.markdown(f"**Your table:** {shown_aggregation.lower()} of {html.escape(value_field)} by {html.escape(row_field)}")
+                shown_pivot = pivot.reset_index()
+                table_html = shown_pivot.to_html(index=False, border=0, classes="dl-data-table")
+                st.markdown(f'<div class="dl-table-scroll">{table_html}</div>', unsafe_allow_html=True)
+                csv = shown_pivot.to_csv(index=False).encode("utf-8")
+                st.download_button("Download this pivot table as CSV", csv, "aurlex_pivot.csv", "text/csv")
+        except ValueError as exc:
+            st.warning(str(exc))
 
 elif page == "Data Lab":
     if df is None:
@@ -597,7 +691,7 @@ elif page == "Reports":
     if df is None:
         st.info("Load a dataset from the left to enable exports.")
     else:
-        render_downloads(df, st.session_state.table_name)
+        render_downloads(df, st.session_state.table_name, "reports")
         st.markdown("#### Dataset preview")
         preview = df.head(500).to_html(index=False, border=0, classes="dl-data-table")
         st.markdown(f'<div class="dl-table-scroll">{preview}</div>', unsafe_allow_html=True)
@@ -607,6 +701,18 @@ else:
         '<div class="dl-card"><div class="dl-card-title">Data connectors</div><p class="dl-muted">The connector view is a placeholder. The current dashboard supports local file uploads and multi-file merges.</p></div>',
         unsafe_allow_html=True,
     )
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
