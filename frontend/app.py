@@ -252,14 +252,15 @@ def render_downloads(dataframe, table_name, key_prefix="exports"):
     sql_text = f'SELECT {export_cols} FROM "{safe_name}";\n'
     pdf_bytes = build_pdf_report(dataframe, table_name)
     buttons = st.columns(4, gap="small")
+    compact = key_prefix == "top"
     with buttons[0]:
-        st.download_button("Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"{key_prefix}_excel")
+        st.download_button("Excel" if compact else "Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"{key_prefix}_excel")
     with buttons[1]:
-        st.download_button("Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True, key=f"{key_prefix}_csv")
+        st.download_button("CSV" if compact else "Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True, key=f"{key_prefix}_csv")
     with buttons[2]:
-        st.download_button("Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True, key=f"{key_prefix}_sql")
+        st.download_button("SQL" if compact else "Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True, key=f"{key_prefix}_sql")
     with buttons[3]:
-        st.download_button("Dashboard PDF", pdf_bytes, "volara_dashboard.pdf", "application/pdf", use_container_width=True, key=f"{key_prefix}_pdf")
+        st.download_button("PDF" if compact else "Dashboard PDF", pdf_bytes, "volara_dashboard.pdf", "application/pdf", use_container_width=True, key=f"{key_prefix}_pdf")
 
 
 def run_clean(dataframe, api_health):
@@ -344,13 +345,16 @@ with st.sidebar:
     if st.session_state.dark_mode:
         st.markdown("""
         <style>
-        :root { --dl-bg:#17191f; --dl-panel:#22252d; --dl-line:#373b46; --dl-text:#edf0f6; --dl-muted:#a4abba; }
-        [data-testid="stAppViewContainer"], .stApp { background:#17191f; color:#edf0f6; }
-        [data-testid="stSidebar"] { background:#22252d; }
-        .dl-card, .dl-table-scroll, div[data-testid="stPlotlyChart"] { background:#22252d !important; }
+        :root { --dl-bg:#17191f !important; --dl-panel:#22252d !important; --dl-line:#373b46 !important; --dl-text:#edf0f6 !important; --dl-muted:#a4abba !important; }
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], .stApp { background-color:#17191f !important; color:#edf0f6 !important; }
+        [data-testid="stSidebar"], [data-testid="stSidebarContent"] { background-color:#22252d !important; }
+        .stButton > button, .stDownloadButton > button, [data-baseweb="select"] > div, input, textarea { background:#2c303a !important; color:#edf0f6 !important; border-color:#555d6b !important; }
+        input::placeholder, textarea::placeholder { color:#a4abba !important; }
+        .dl-card, .dl-table-scroll, div[data-testid="stPlotlyChart"], [data-testid="stMetric"] { background:#22252d !important; color:#edf0f6 !important; border-color:#373b46 !important; }
+        [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3, label, [data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color:#edf0f6 !important; }
         .dl-data-table, .dl-data-table th, .dl-data-table td { color:#edf0f6; background:#22252d; }
-        .dl-data-table th { background:#2c303a; }
-        .dl-msg.bot { background:#2c303a; color:#edf0f6; }
+        .dl-data-table th { background:#2c303a !important; }
+        .dl-msg.bot { background:#2c303a !important; color:#edf0f6 !important; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -436,8 +440,8 @@ with exports:
 if page == "Dashboard":
     main_column, chat_column = st.columns([2.55, 1], gap="medium")
     with main_column:
-        chart_slot = st.empty()
         if df is None:
+            chart_slot = st.empty()
             with chart_slot.container():
                 st.markdown(
                     '<div class="dl-card"><div class="dl-card-title">Your analysis canvas</div><p class="dl-muted">Upload a file from the left or load the sample sales dataset to start.</p></div>',
@@ -453,6 +457,7 @@ if page == "Dashboard":
             kpi_cols[2].metric("Missing values", f"{missing_count:,}")
             duplicate_count = int(df.duplicated().sum())
             kpi_cols[3].metric("Duplicate rows", f"{duplicate_count:,}")
+            chart_slot = st.empty()
             control_column, table_column = st.columns([0.82, 2.5], gap="small")
             with control_column:
                 st.markdown('<div class="dl-section">Chart type</div>', unsafe_allow_html=True)
