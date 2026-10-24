@@ -1,339 +1,631 @@
-import streamlit as st
-import pandas as pd, plotly.express as px, plotly.graph_objects as go, scipy.stats as stats, requests, io, os
-from datetime import datetime
-from dotenv import load_dotenv
-load_dotenv()
-API_URL=os.getenv('API_URL','http://localhost:8000')
-st.set_page_config(page_title='Aurlex Insights', page_icon='◼', layout='wide', initial_sidebar_state='expanded')
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
-:root{--bg:#0A0A0B;--panel:#111113;--panel2:#18181B;--border:#232326;--text:#FAFAFA;--text2:#A1A1AA;--text3:#71717A;--green:#22C55E}
-html,body,[class*="css"]{font-family:'Geist',sans-serif!important}
-#MainMenu,footer,header{visibility:hidden}.stApp{background:var(--bg)}
-section[data-testid="stSidebar"]{background:var(--panel)!important;border-right:1px solid var(--border)!important}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
-.metric-label{font-size:11px;font-weight:500;letter-spacing:0.5px;text-transform:uppercase;color:var(--text3);margin-bottom:8px}
-.metric-value{font-size:24px;font-weight:600;letter-spacing:-0.6px;color:var(--text)}
-.metric-delta{font-size:12px;color:var(--text2);margin-top:6px;font-family:'Geist Mono',monospace}
-.kbd{font-family:'Geist Mono';font-size:11px;background:#18181B;border:1px solid #232326;padding:2px 6px;border-radius:4px;color:#A1A1AA}
-.stButton>button{background:#FAFAFA!important;color:#0A0A0B!important;border-radius:8px!important;font-weight:500!important;height:36px!important}
-div[data-testid="stDataFrame"]{border:1px solid #232326;border-radius:10px;overflow:hidden}
-</style>
-""", unsafe_allow_html=True)
+import html
+import io
+import os
+import re
+from pathlib import Path
 
-for k in ['df','table_name','charts','workspace','page','disambig_ctx']:
-    if k not in st.session_state:
-        st.session_state[k]=None if k!='charts' else [] if k=='charts' else {} if k=='disambig_ctx' else None
-if not st.session_state.workspace:
-    st.session_state.workspace='Acme Corp'
-if not st.session_state.page:
-    st.session_state.page='Dashboard'
-if st.session_state.charts is None:
-    st.session_state.charts=[]
-if st.session_state.disambig_ctx is None:
-    st.session_state.disambig_ctx={}
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+ROOT = Path(__file__).resolve().parents[1]
+
+st.set_page_config(
+    page_title="Aurlex Insights",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    :root {
+      --dl-bg: #f3f4f7;
+      --dl-panel: #ffffff;
+      --dl-line: #e3e6ec;
+      --dl-text: #1f2430;
+      --dl-muted: #6b7280;
+      --dl-accent: #f2c811;
+      --dl-blue: #2563eb;
+      --dl-green: #16a34a;
+    }
+    html, body, [class*="css"] { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    [data-testid="stAppViewContainer"], .stApp { background: var(--dl-bg); color: var(--dl-text); }
+    [data-testid="stHeader"] { background: transparent; height: 0; }
+    [data-testid="stToolbar"] { right: 1rem; }
+    .main .block-container { max-width: 100%; padding: 1rem 1.15rem 1.5rem; }
+    [data-testid="stSidebar"] {
+      background: var(--dl-panel);
+      border-right: 1px solid var(--dl-line);
+      min-width: 248px;
+      max-width: 248px;
+    }
+    [data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: var(--dl-text); }
+    .dl-brand { display:flex; align-items:center; gap:10px; padding:7px 2px 17px; border-bottom:1px solid var(--dl-line); margin-bottom:18px; }
+    .dl-mark { width:30px; height:30px; display:grid; place-items:center; border-radius:7px; background:var(--dl-accent); color:#1f2430; font-weight:800; }
+    .dl-brand-name { font-weight:700; font-size:15px; color:var(--dl-text); }
+    .dl-brand-sub { color:var(--dl-muted); font-size:11px; margin-top:2px; }
+    .dl-section { margin:14px 0 8px; color:var(--dl-muted); text-transform:uppercase; font-size:11px; font-weight:700; letter-spacing:.06em; }
+    .dl-topbar { display:flex; justify-content:space-between; align-items:center; padding:2px 0 10px; border-bottom:1px solid var(--dl-line); margin-bottom:14px; }
+    .dl-title { font-size:20px; font-weight:700; color:var(--dl-text); }
+    .dl-subtitle { color:var(--dl-muted); font-size:12px; margin-top:3px; }
+    .dl-card { background:var(--dl-panel); border:1px solid var(--dl-line); border-radius:10px; padding:14px 16px; }
+    .dl-card-title { color:var(--dl-text); font-size:14px; font-weight:650; }
+    .dl-muted { color:var(--dl-muted); font-size:12px; }
+    .dl-chat-head { padding:8px 0 12px; border-bottom:1px solid var(--dl-line); font-weight:700; font-size:15px; }
+    .dl-msg { padding:10px 12px; border-radius:10px; margin:8px 0; max-width:94%; white-space:pre-wrap; font-size:13px; line-height:1.45; }
+    .dl-msg.bot { background:#f3f4f7; color:var(--dl-text); margin-right:auto; }
+    .dl-msg.user { background:var(--dl-blue); color:#fff; margin-left:auto; }
+    .stButton > button, .stDownloadButton > button {
+      border:1px solid var(--dl-line); background:#fff; color:var(--dl-text);
+      border-radius:7px; min-height:36px; font-weight:550;
+    }
+    .stButton > button:hover, .stDownloadButton > button:hover { border-color:var(--dl-blue); color:var(--dl-blue); }
+    button[kind="primary"] { background:#1f2430 !important; color:#fff !important; border-color:#1f2430 !important; }
+    div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] { border:1px solid var(--dl-line); border-radius:8px; overflow:hidden; background:#fff; }
+    div[data-testid="stPlotlyChart"] { border:1px solid var(--dl-line); border-radius:9px; overflow:hidden; background:#fff; padding:5px; }
+    div[data-testid="stAlert"] { border-radius:8px; }
+    @media (max-width: 900px) {
+      .main .block-container { padding: .75rem; }
+      [data-testid="stSidebar"] { min-width: 220px; max-width: 220px; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+DEFAULTS = {
+    "df": None,
+    "table_name": None,
+    "charts": [],
+    "workspace": "Personal",
+    "page": "Dashboard",
+    "disambig_ctx": {},
+    "source_files": [],
+    "messages": [
+        {
+            "role": "assistant",
+            "content": "Hi! Load a dataset, choose a chart type, and ask me about your data.",
+        }
+    ],
+    "row_selection_default": True,
+    "loaded_upload_fingerprint": None,
+}
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value.copy() if isinstance(value, (list, dict)) else value
+
+
+def api_status():
+    try:
+        response = requests.get(f"{API_URL}/api/health", timeout=1.2)
+        if response.ok:
+            return response.json()
+    except requests.RequestException:
+        pass
+    return None
+
+
+def read_uploaded(file_obj):
+    name = file_obj.name.lower()
+    content = file_obj.getvalue()
+    if name.endswith(".csv"):
+        try:
+            return pd.read_csv(io.BytesIO(content))
+        except UnicodeDecodeError:
+            return pd.read_csv(io.BytesIO(content), encoding="latin1")
+    if name.endswith((".xlsx", ".xls")):
+        return pd.read_excel(io.BytesIO(content))
+    if name.endswith(".parquet"):
+        return pd.read_parquet(io.BytesIO(content))
+    if name.endswith(".json"):
+        return pd.read_json(io.BytesIO(content))
+    return None
+
+
+def clear_row_selection():
+    st.session_state.pop("datalens_table_editor", None)
+    st.session_state["row_selection_default"] = True
+
+
+def set_dataset(dataframe, table_name=None, sources=None, fingerprint=None):
+    st.session_state.df = dataframe.reset_index(drop=True)
+    st.session_state.table_name = table_name or "local_dataset"
+    st.session_state.source_files = sources or []
+    st.session_state.loaded_upload_fingerprint = fingerprint
+    clear_row_selection()
+
+
+def backend_upload(file_obj):
+    files = {"file": (file_obj.name, file_obj.getvalue(), file_obj.type or "application/octet-stream")}
+    response = requests.post(f"{API_URL}/api/upload", files=files, timeout=35)
+    response.raise_for_status()
+    return response.json()
+
+
+def backend_multi_upload(files, merge_how):
+    payload = [("files", (file.name, file.getvalue(), file.type or "application/octet-stream")) for file in files]
+    response = requests.post(
+        f"{API_URL}/api/upload-multi?merge_how={merge_how}",
+        files=payload,
+        timeout=45,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def load_sample(api_health):
+    sample_path = ROOT / "sample_sales.csv"
+    dataframe = pd.read_csv(sample_path)
+    table_name = "sample_sales"
+    if api_health:
+        try:
+            with sample_path.open("rb") as sample:
+                result = requests.post(
+                    f"{API_URL}/api/upload",
+                    files={"file": ("sample_sales.csv", sample, "text/csv")},
+                    timeout=20,
+                )
+            if result.ok:
+                table_name = result.json()["table_name"]
+        except requests.RequestException:
+            pass
+    set_dataset(dataframe, table_name, ["sample_sales.csv"], ("sample",))
+    st.toast("Sample sales data loaded")
+
+
+def answer_locally(question, dataframe, category, metric):
+    if dataframe is None:
+        return "Upload a file or load the sample dataset first."
+    lower = question.lower()
+    response = f"Your dataset has {len(dataframe):,} rows and {len(dataframe.columns)} columns."
+    if metric and metric != "Rows" and metric in dataframe.columns:
+        response += f"\n\n{metric} totals {dataframe[metric].sum():,.2f} (average {dataframe[metric].mean():,.2f})."
+        if category and category in dataframe.columns:
+            summary = (
+                dataframe.groupby(category, dropna=False)[metric]
+                .sum()
+                .sort_values(ascending=False)
+                .head(5)
+            )
+            if "top" in lower or "highest" in lower or "most" in lower:
+                response += "\n\nTop groups:\n" + "\n".join(
+                    f"• {html.escape(str(label))}: {value:,.2f}"
+                    for label, value in summary.items()
+                )
+    response += "\n\nAdd GEMINI_API_KEY to enable natural-language AI queries."
+    return response
+
+
+def answer_with_ai(question, dataframe, category, metric, api_health):
+    if dataframe is None:
+        return "Upload a file or load the sample dataset first."
+    if not api_health or not api_health.get("ai_enabled") or not st.session_state.table_name:
+        return answer_locally(question, dataframe, category, metric)
+    try:
+        response = requests.post(
+            f"{API_URL}/api/ai-query",
+            json={
+                "query": question,
+                "table_name": st.session_state.table_name,
+                "disambiguation_context": st.session_state.disambig_ctx,
+            },
+            timeout=45,
+        )
+        result = response.json()
+        if response.ok and result.get("status") == "needs_clarification":
+            return "\n".join(result.get("questions", ["Please clarify the query."]))
+        if response.ok:
+            insight = result.get("insight", "Query complete.")
+            sql = result.get("sql_query", "")
+            return f"{insight}\n\nSQL: {sql}"
+        return result.get("detail", response.text)
+    except requests.RequestException as exc:
+        return f"Could not reach the analysis API: {exc}"
+
+
+def render_downloads(dataframe, table_name):
+    if dataframe is None:
+        st.caption("Load data to enable exports.")
+        return
+    csv_bytes = dataframe.to_csv(index=False).encode("utf-8")
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        dataframe.to_excel(writer, index=False, sheet_name="Data")
+        numeric = dataframe.select_dtypes(include="number")
+        if not numeric.empty:
+            numeric.describe().to_excel(writer, sheet_name="Summary")
+    safe_name = table_name if table_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name) else "uploaded_data"
+    export_cols = ", ".join(f'"{column}"' for column in dataframe.columns)
+    sql_text = f'SELECT {export_cols} FROM "{safe_name}";\n'
+    buttons = st.columns(3, gap="small")
+    with buttons[0]:
+        st.download_button("Export Excel", excel_buffer.getvalue(), "aurlex_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    with buttons[1]:
+        st.download_button("Export CSV", csv_bytes, "aurlex_data.csv", "text/csv", use_container_width=True)
+    with buttons[2]:
+        st.download_button("Export SQL", sql_text, "aurlex_query.sql", "text/plain", use_container_width=True)
+
+
+def run_clean(dataframe, api_health):
+    if api_health and st.session_state.table_name:
+        try:
+            response = requests.post(
+                f"{API_URL}/api/clean",
+                json={
+                    "table_name": st.session_state.table_name,
+                    "operations": ["trim", "dedupe", "null_fill", "type_fix", "lower_headers"],
+                },
+                timeout=25,
+            )
+            response.raise_for_status()
+            page = requests.post(
+                f"{API_URL}/api/filter-sort",
+                json={"table_name": st.session_state.table_name, "page": 1, "page_size": 10000},
+                timeout=25,
+            )
+            page.raise_for_status()
+            set_dataset(pd.DataFrame(page.json()["data"]), st.session_state.table_name, st.session_state.source_files, st.session_state.loaded_upload_fingerprint)
+            st.toast("Dataset cleaned")
+            return
+        except requests.RequestException as exc:
+            st.error(f"API cleaning failed: {exc}")
+            return
+    cleaned = dataframe.copy()
+    for column in cleaned.select_dtypes(include="object").columns:
+        cleaned[column] = cleaned[column].astype(str).str.strip().replace({"nan": pd.NA, "None": pd.NA, "": pd.NA})
+    cleaned = cleaned.drop_duplicates().reset_index(drop=True)
+    set_dataset(cleaned, st.session_state.table_name, st.session_state.source_files, st.session_state.loaded_upload_fingerprint)
+    st.toast(f"Cleaned locally · {len(cleaned):,} rows")
+
+
+api_health = api_status()
 
 with st.sidebar:
-    st.markdown('<div style="display:flex;align-items:center;gap:10px;padding:8px 4px 18px 4px;border-bottom:1px solid #232326;margin-bottom:16px;"><div style="width:28px;height:28px;background:#FAFAFA;color:#0A0A0B;display:flex;align-items:center;justify-content:center;font-weight:700;border-radius:6px;">A</div><div><div style="font-weight:600;font-size:14px;color:#FAFAFA;">Aurlex Insights</div><div style="font-size:11px;color:#A1A1AA;">v2.1 • Multi + Clean + Ask</div></div></div>', unsafe_allow_html=True)
-    st.selectbox('Workspace',['Acme Corp','Personal','University Lab'], key='workspace')
-    for name in ['Dashboard','Data Lab','Ask Aurlex','Connectors','Reports']:
-        if st.button(name, key=f'nav_{name}', use_container_width=True):
-            st.session_state.page=name
+    st.markdown(
+        '<div class="dl-brand"><div class="dl-mark">A</div><div><div class="dl-brand-name">Aurlex Insights</div><div class="dl-brand-sub">Visual data workspace</div></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="dl-section">Add data source</div>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader(
+        "Excel, CSV, SQL, SQLite, JSON, or Parquet",
+        type=["csv", "xlsx", "xls", "sql", "db", "sqlite", "json", "parquet"],
+        label_visibility="collapsed",
+        key="single",
+    )
+    multi_files = st.file_uploader(
+        "Drop 2–3 files to merge",
+        type=["csv", "xlsx", "xls", "parquet"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+        key="multi",
+    )
+    merge_how = st.selectbox("Merge mode", ["concat", "union", "separate"], key="merge_how")
+    if st.button("Load sample dataset", use_container_width=True):
+        load_sample(api_health)
+
+    st.markdown('<div class="dl-section">Loaded sources</div>', unsafe_allow_html=True)
+    if st.session_state.source_files:
+        for source in st.session_state.source_files:
+            st.markdown(f'<div class="dl-muted">▰ {html.escape(str(source))}</div>', unsafe_allow_html=True)
+        st.caption(f"{len(st.session_state.df):,} rows · {len(st.session_state.df.columns)} columns")
+        if st.button("Remove dataset", use_container_width=True):
+            st.session_state.df = None
+            st.session_state.table_name = None
+            st.session_state.source_files = []
+            st.session_state.loaded_upload_fingerprint = None
+            clear_row_selection()
             st.rerun()
-    try:
-        r=requests.get(f'{API_URL}/api/health',timeout=1.5)
-        if r.status_code==200:
-            h=r.json()
-            st.markdown(f"<div class='card' style='padding:10px;font-size:12px;'>API {h['status']} • {h['tables_loaded']} tables • AI {'ON' if h['ai_enabled'] else 'OFF'}<br><span style='color:#71717A;font-size:11px;'>{h['version']}</span></div>", unsafe_allow_html=True)
-    except:
-        st.markdown("<div class='card' style='padding:10px;font-size:12px;'>Local mode</div>", unsafe_allow_html=True)
-    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
-    st.markdown('<div style="font-size:10px;letter-spacing:0.8px;color:#71717A;text-transform:uppercase;margin-bottom:6px;">Single file</div>', unsafe_allow_html=True)
-    uploaded_file=st.file_uploader('Drop CSV/XLSX/SQL', type=['csv','xlsx','xls','parquet','sql','db','sqlite','json'], label_visibility='collapsed', key='single')
-    st.markdown('<div style="font-size:10px;letter-spacing:0.8px;color:#71717A;text-transform:uppercase;margin:12px 0 6px 0;">Multi-file (2-3 Excel/SQL)</div>', unsafe_allow_html=True)
-    multi_files=st.file_uploader('Drop 2-3 to merge', type=['csv','xlsx','xls','parquet'], accept_multiple_files=True, key='multi', label_visibility='collapsed')
-    merge_how=st.selectbox('Merge', ['concat','union','separate'], label_visibility='collapsed')
-
-api_health=None
-try:
-    r=requests.get(f'{API_URL}/api/health',timeout=1)
-    if r.status_code==200:
-        api_health=r.json()
-except:
-    pass
-
-def load_from_api_upload(file_obj):
-    files={'file':(file_obj.name, file_obj.getvalue(), file_obj.type)}
-    res=requests.post(f'{API_URL}/api/upload', files=files, timeout=30)
-    if res.status_code==200:
-        data=res.json()
-        st.session_state.table_name=data['table_name']
-        # load locally for UI
-        try:
-            if file_obj.name.endswith('.csv'):
-                st.session_state.df=pd.read_csv(io.BytesIO(file_obj.getvalue()))
-            elif file_obj.name.endswith(('.xls','.xlsx')):
-                st.session_state.df=pd.read_excel(io.BytesIO(file_obj.getvalue()))
-            else:
-                st.session_state.df=pd.DataFrame(data['preview'])
-        except:
-            st.session_state.df=pd.DataFrame(data['preview'])
-        st.toast(f"Loaded {data['rows']} rows • Clean report: {data.get('clean_report')}")
     else:
-        st.error(res.text)
+        st.caption("No files loaded")
 
-if multi_files and len(multi_files)>=2 and st.session_state.df is None:
-    try:
-        if api_health:
-            files=[('files',(f.name, f.getvalue(), f.type)) for f in multi_files]
-            res=requests.post(f'{API_URL}/api/upload-multi?merge_how={merge_how}', files=files, timeout=45)
-            if res.status_code==200:
-                data=res.json()
-                if data['mode'] in ['concat','union']:
-                    st.session_state.table_name=data['table_name']
-                    st.session_state.df=pd.DataFrame(data['preview'])
-                    # fetch full via filter endpoint? keep preview for now, but load full via API
-                    try:
-                        full=requests.post(f'{API_URL}/api/filter-sort', json={'table_name':data['table_name'],'page':1,'page_size':1000}, timeout=20)
-                        if full.status_code==200:
-                            st.session_state.df=pd.DataFrame(full.json()['data'])
-                    except:
-                        pass
-                    st.toast(f"Merged {len(multi_files)} files → {data['rows']} rows")
-                else:
-                    st.success(f"Created {len(data['tables'])} separate tables: {data['tables']}")
-                    # load first
-                    first=data['tables'][0]
-                    st.session_state.table_name=first['table']
-                    # fetch
-                    full=requests.post(f'{API_URL}/api/filter-sort', json={'table_name':first['table'],'page':1,'page_size':1000})
-                    if full.status_code==200:
-                        st.session_state.df=pd.DataFrame(full.json()['data'])
-            else:
-                st.error(res.text)
-    except Exception as e:
-        st.error(str(e))
-elif uploaded_file and st.session_state.df is None:
-    try:
-        if api_health:
-            load_from_api_upload(uploaded_file)
+    st.markdown('<div class="dl-section">Workspace</div>', unsafe_allow_html=True)
+    pages = ["Dashboard", "Data Lab", "Ask Aurlex", "Reports", "Connectors"]
+    if st.session_state.page not in pages:
+        st.session_state.page = "Dashboard"
+    st.radio("Open workspace", pages, key="page", label_visibility="collapsed")
+
+    st.markdown('<div class="dl-section">Connection</div>', unsafe_allow_html=True)
+    if api_health:
+        status_text = "API connected"
+        if api_health.get("ai_enabled"):
+            status_text += " · Gemini on"
         else:
-            if uploaded_file.name.endswith('.csv'):
-                st.session_state.df=pd.read_csv(uploaded_file)
-            else:
-                st.session_state.df=pd.read_excel(uploaded_file)
-            st.session_state.table_name='local_dataset'
-    except Exception as e:
-        st.error(str(e))
+            status_text += " · local AI mode"
+        st.markdown(f'<div class="dl-muted">● {status_text}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dl-muted">● Local mode · API offline</div>', unsafe_allow_html=True)
 
-if st.session_state.df is None:
-    st.markdown('<p style="font-size:28px;font-weight:650;color:#FAFAFA;">No dataset yet</p><p style="color:#A1A1AA;">Upload 1 file or 2-3 files to merge. Supports CSV, Excel, SQL dump, SQLite.</p>', unsafe_allow_html=True)
-    c1,c2,c3=st.columns(3)
-    with c1:
-        st.markdown('<div class="card"><div class="metric-label">Multi-upload</div><b>2-3 Excel/SQL</b><br><span style="color:#A1A1AA;font-size:13px;">Concat rows or union deduped. Separate tables option.</span></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown('<div class="card"><div class="metric-label">Auto Clean</div><b>Trim + Dedupe + Type Fix</b><br><span style="color:#A1A1AA;font-size:13px;">One-click cleaning, report shown.</span></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown('<div class="card"><div class="metric-label">Ask with Clarify</div><b>Rahul in HR vs Tech</b><br><span style="color:#A1A1AA;font-size:13px;">AI detects ambiguity and asks: which Rahul?</span></div>', unsafe_allow_html=True)
-    st.stop()
 
-df=st.session_state.df
-numeric_cols=df.select_dtypes(include=['number']).columns.tolist()
-all_cols=df.columns.tolist()
-page=st.session_state.page
-
-# Top bar with cleaning, filtering, sorting controls (for all pages)
-st.markdown(f"<p style='font-size:28px;font-weight:650;color:#FAFAFA;margin-bottom:0;'>{page}</p><p style='color:#A1A1AA;font-size:13px;'>{st.session_state.workspace} • {st.session_state.table_name} • {len(df):,} rows • {len(df.columns)} cols</p>", unsafe_allow_html=True)
-
-# Cleaning & Filter bar (always visible)
-with st.container():
-    st.markdown('<div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">', unsafe_allow_html=True)
-    c1,c2,c3,c4,c5=st.columns([1,1,1,1,1])
-    with c1:
-        if st.button('🧹 Auto Clean', use_container_width=True):
-            if api_health:
-                try:
-                    res=requests.post(f'{API_URL}/api/clean', json={'table_name':st.session_state.table_name,'operations':['trim','dedupe','null_fill','type_fix','lower_headers']}, timeout=20)
-                    if res.status_code==200:
-                        data=res.json()
-                        st.toast(f"Cleaned: {data['report']['details']}")
-                        # reload
-                        full=requests.post(f'{API_URL}/api/filter-sort', json={'table_name':st.session_state.table_name,'page':1,'page_size':1000})
-                        if full.status_code==200:
-                            st.session_state.df=pd.DataFrame(full.json()['data'])
-                            st.rerun()
-                except Exception as e:
-                    st.error(str(e))
-            else:
-                # local clean
-                df_clean=df.copy()
-                for col in df_clean.select_dtypes(include=['object']).columns:
-                    df_clean[col]=df_clean[col].astype(str).str.strip()
-                df_clean=df_clean.drop_duplicates()
-                st.session_state.df=df_clean
-                st.toast(f"Locally cleaned → {len(df_clean)} rows")
-                st.rerun()
-    with c2:
-        sort_col=st.selectbox('Sort by', ['None']+all_cols, key='sort_col')
-    with c3:
-        sort_dir=st.selectbox('Dir', ['asc','desc'], key='sort_dir')
-    with c4:
-        filter_col=st.selectbox('Filter col', ['None']+all_cols, key='filter_col')
-    with c5:
-        filter_val=st.text_input('Filter value contains', key='filter_val')
-    
-    if sort_col!='None' or (filter_col!='None' and filter_val):
-        if st.button('Apply Sort/Filter'):
-            if api_health:
-                payload={'table_name':st.session_state.table_name,'page':1,'page_size':1000}
-                if sort_col!='None':
-                    payload['sort_by']=sort_col
-                    payload['sort_dir']=sort_dir
-                if filter_col!='None' and filter_val:
-                    payload['filters']=[{'column':filter_col,'op':'contains','value':filter_val}]
-                try:
-                    res=requests.post(f'{API_URL}/api/filter-sort', json=payload, timeout=20)
-                    if res.status_code==200:
-                        data=res.json()
-                        st.session_state.df=pd.DataFrame(data['data'])
-                        st.rerun()
-                except Exception as e:
-                    st.error(str(e))
-            else:
-                # local filter/sort
-                dff=df
-                if filter_col!='None' and filter_val:
-                    dff=dff[dff[filter_col].astype(str).str.contains(filter_val, case=False, na=False)]
-                if sort_col!='None':
-                    dff=dff.sort_values(by=sort_col, ascending=(sort_dir=='asc'))
-                st.session_state.df=dff
-                st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
-
-if page=='Dashboard':
-    if numeric_cols:
-        cols=st.columns(4)
-        for i,col in enumerate(numeric_cols[:4]):
-            with cols[i]:
-                total=df[col].sum(); mean=df[col].mean()
-                st.markdown(f"<div class='card'><div class='metric-label'>{col}</div><div class='metric-value'>{total:,.0f}</div><div class='metric-delta'>mean {mean:,.1f}</div></div>", unsafe_allow_html=True)
-    left,right=st.columns([2.2,1])
-    with left:
-        st.markdown('<div class="card"><div class="metric-label">Anomaly Autopsy</div>', unsafe_allow_html=True)
-        if numeric_cols:
-            pcol=st.selectbox('Metric', numeric_cols, label_visibility='collapsed', key='anom')
-            z=stats.zscore(df[pcol].dropna()); outliers=df.loc[df[pcol].notna()].iloc[(abs(z)>2.5).nonzero()[0]]
-            if not outliers.empty:
-                st.markdown(f"<div style='color:#EAB308;font-size:13px;margin:8px 0;'>⚠ {len(outliers)} outliers</div>", unsafe_allow_html=True)
-                fig=px.box(df,y=pcol,points='outliers',template='plotly_dark'); fig.update_layout(height=240,margin=dict(l=0,r=0,t=10,b=0),paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)'); st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
-                st.dataframe(outliers.head(10),use_container_width=True,height=200)
-            else:
-                st.markdown("<div style='color:#22C55E;font-size:13px;'>✓ No anomalies</div>", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with right:
-        st.markdown('<div class="card"><div class="metric-label">Profile</div>', unsafe_allow_html=True)
-        prof=pd.DataFrame({'null %':(df.isnull().sum()/len(df)*100).round(1),'type':df.dtypes.astype(str)}); st.dataframe(prof,use_container_width=True,height=320)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('<div class="card" style="margin-top:12px;"><div class="metric-label">Sample</div>', unsafe_allow_html=True)
-    st.dataframe(df.head(200),use_container_width=True,height=400)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-elif page=='Data Lab':
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    f1,f2,f3,f4=st.columns(4)
-    with f1:
-        title=st.text_input('Title','Revenue by Category')
-    with f2:
-        ctype=st.selectbox('Type',['Bar','Line','Area','Scatter','Histogram','Heatmap'])
-    with f3:
-        x=st.selectbox('X',all_cols)
-    with f4:
-        y=st.selectbox('Y',numeric_cols if numeric_cols else all_cols)
-    color=st.selectbox('Group',['None']+all_cols)
-    if st.button('Add to canvas'):
-        st.session_state.charts.append({'title':title,'type':ctype,'x':x,'y':y,'color':None if color=='None' else color}); st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-    for idx,c in enumerate(st.session_state.charts):
-        st.markdown(f"<div class='card' style='margin-top:12px;'><div class='metric-label'>{c['type']}</div><b>{c['title']}</b>", unsafe_allow_html=True)
+if multi_files and len(multi_files) >= 2:
+    fingerprint = ("multi", tuple((file.name, len(file.getvalue())) for file in multi_files))
+    if fingerprint != st.session_state.loaded_upload_fingerprint:
         try:
-            colr=c.get('color')
-            if c['type']=='Bar':
-                fig=px.bar(df,x=c['x'],y=c['y'],color=colr,template='plotly_dark')
-            elif c['type']=='Line':
-                fig=px.line(df,x=c['x'],y=c['y'],color=colr,markers=True,template='plotly_dark')
-            elif c['type']=='Area':
-                fig=px.area(df,x=c['x'],y=c['y'],color=colr,template='plotly_dark')
-            elif c['type']=='Scatter':
-                fig=px.scatter(df,x=c['x'],y=c['y'],color=colr,template='plotly_dark')
-            elif c['type']=='Histogram':
-                fig=px.histogram(df,x=c['x'],color=colr,template='plotly_dark')
+            parsed = [read_uploaded(file) for file in multi_files]
+            if any(frame is None for frame in parsed):
+                raise ValueError("Multi-file merge supports CSV, Excel, and Parquet.")
+            if api_health:
+                result = backend_multi_upload(multi_files, merge_how)
+                if result.get("mode") == "separate":
+                    frames = parsed[:1]
+                    table_name = result["tables"][0]["table"]
+                else:
+                    frames = parsed
+                    table_name = result["table_name"]
+                dataframe = pd.concat(frames, ignore_index=True, sort=False)
+                if merge_how == "union":
+                    dataframe = dataframe.drop_duplicates()
+            elif merge_how == "separate":
+                dataframe = parsed[0]
+                table_name = "local_dataset"
             else:
-                corr=df[numeric_cols].corr() if len(numeric_cols)>=2 else pd.DataFrame(); fig=px.imshow(corr,text_auto=True) if not corr.empty else go.Figure()
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)'); st.plotly_chart(fig,use_container_width=True,config={'displayModeBar':False})
-        except Exception as e:
-            st.error(str(e))
-        if st.button('Remove',key=f'rm_{idx}'):
-            st.session_state.charts.pop(idx); st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+                dataframe = pd.concat(parsed, ignore_index=True, sort=False)
+                if merge_how == "union":
+                    dataframe = dataframe.drop_duplicates()
+                table_name = "local_dataset"
+            set_dataset(dataframe, table_name, [file.name for file in multi_files], fingerprint)
+            st.toast(f"Loaded {len(multi_files)} files · {len(dataframe):,} rows")
+        except Exception as exc:
+            st.error(f"Could not load files: {exc}")
+elif uploaded_file:
+    fingerprint = ("single", uploaded_file.name, len(uploaded_file.getvalue()))
+    if fingerprint != st.session_state.loaded_upload_fingerprint:
+        try:
+            table_name = "local_dataset"
+            dataframe = read_uploaded(uploaded_file)
+            if api_health:
+                result = backend_upload(uploaded_file)
+                table_name = result["table_name"]
+                if dataframe is None:
+                    dataframe = pd.DataFrame(result.get("preview", []))
+            if dataframe is None:
+                raise ValueError("This file type needs the API. Start the app with RUN_AURLEX_INSIGHTS.bat and try again.")
+            set_dataset(dataframe, table_name, [uploaded_file.name], fingerprint)
+            st.toast(f"Loaded {len(dataframe):,} rows")
+        except Exception as exc:
+            st.error(f"Could not load file: {exc}")
 
-elif page=='Ask Aurlex':
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    q=st.text_area('Question',placeholder="e.g., Rahul's salary? (if Rahul in HR and Tech, it will ask which) • Top 5 depts?",height=90,label_visibility='collapsed')
-    # Show disambiguation context if any
-    if st.session_state.disambig_ctx:
-        st.markdown(f"<div style='font-size:12px;color:#A1A1AA;'>Context: {st.session_state.disambig_ctx} <button style='font-size:11px;'>clear</button></div>", unsafe_allow_html=True)
-        if st.button('Clear context'):
-            st.session_state.disambig_ctx={}
-            st.rerun()
-    ask=st.button('Run query →')
-    st.markdown('</div>', unsafe_allow_html=True)
-    if ask and q.strip():
-        if api_health:
-            with st.spinner('Checking ambiguity + writing SQL...'):
-                try:
-                    payload={'query':q,'table_name':st.session_state.table_name,'disambiguation_context':st.session_state.disambig_ctx}
-                    res=requests.post(f'{API_URL}/api/ai-query',json=payload,timeout=45)
-                    if res.status_code==200:
-                        data=res.json()
-                        if data.get('status')=='needs_clarification':
-                            st.markdown('<div class="card" style="margin-top:12px;border:1px solid #EAB308;"><div class="metric-label" style="color:#EAB308;">Needs clarification</div>', unsafe_allow_html=True)
-                            for ques in data.get('questions',[]):
-                                st.markdown(f"<div style='font-size:14px;margin:8px 0;'>❓ {ques}</div>", unsafe_allow_html=True)
-                            # Show options as buttons
-                            opts=data.get('options',{})
-                            for key, opt in opts.items():
-                                st.markdown(f"<div style='font-size:12px;color:#A1A1AA;margin-top:8px;'>{key}</div>", unsafe_allow_html=True)
-                                if 'departments' in opt:
-                                    for dept in opt['departments']:
-                                        if st.button(f"Select {dept} for {key}", key=f"sel_{key}_{dept}"):
-                                            st.session_state.disambig_ctx[opt.get('dept_col','department')]=str(dept)
-                                            if 'name_value' in opt:
-                                                st.session_state.disambig_ctx[opt.get('name_col','name')]=str(opt['name_value'])
-                                            st.toast(f"Selected {dept}, now rerun query")
-                                            st.rerun()
-                            st.markdown('</div>', unsafe_allow_html=True)
-                        else:
-                            st.code(data['sql_query'],language='sql')
-                            rdf=pd.DataFrame(data['data']); st.dataframe(rdf,use_container_width=True,height=350)
-                            st.markdown(f"<div style='background:#18181B;border:1px solid #232326;padding:12px;border-radius:8px;color:#A1A1AA;font-size:13px;'><b style='color:#FAFAFA;'>Insight:</b> {data.get('insight','')}</div>", unsafe_allow_html=True)
-                    else:
-                        st.error(res.text)
-                except Exception as e:
-                    st.error(str(e))
+
+df = st.session_state.df
+numeric_cols = df.select_dtypes(include="number").columns.tolist() if df is not None else []
+category_cols = (
+    [column for column in df.columns if column not in numeric_cols]
+    if df is not None
+    else []
+)
+page = st.session_state.page
+
+header, exports = st.columns([2.3, 1.7], gap="small")
+with header:
+    st.markdown(
+        f'<div class="dl-topbar"><div><div class="dl-title">Aurlex Insights · {html.escape(page)}</div><div class="dl-subtitle">{html.escape(st.session_state.workspace)} · {html.escape(str(st.session_state.table_name or "No dataset"))} · {len(df) if df is not None else 0:,} rows</div></div></div>',
+        unsafe_allow_html=True,
+    )
+with exports:
+    render_downloads(df, st.session_state.table_name)
+
+if page == "Dashboard":
+    main_column, chat_column = st.columns([2.55, 1], gap="medium")
+    with main_column:
+        chart_slot = st.empty()
+        if df is None:
+            with chart_slot.container():
+                st.markdown(
+                    '<div class="dl-card"><div class="dl-card-title">Your analysis canvas</div><p class="dl-muted">Upload a file from the left or load the sample sales dataset to start.</p></div>',
+                    unsafe_allow_html=True,
+                )
+            st.info("Supported files include CSV, Excel, SQL/SQLite, JSON, and Parquet.")
         else:
-            st.write(df.describe(include='all').T)
+            control_column, table_column = st.columns([0.82, 2.5], gap="small")
+            with control_column:
+                st.markdown('<div class="dl-section">Chart type</div>', unsafe_allow_html=True)
+                chart_type = st.radio(
+                    "Chart type",
+                    ["Column chart", "Horizontal chart", "Pie chart"],
+                    key="dl_chart_type",
+                    label_visibility="collapsed",
+                )
+                category = st.selectbox(
+                    "Category",
+                    category_cols or df.columns.tolist(),
+                    key="dl_category",
+                )
+                metric_options = ["Rows"] + numeric_cols
+                metric = st.selectbox("Metric", metric_options, key="dl_metric")
+                if st.button("Auto clean", use_container_width=True):
+                    run_clean(df, api_health)
+                    st.rerun()
 
-elif page=='Connectors':
-    st.markdown('<div class="card"><div class="metric-label">Google Sheets • Live</div>Paste link, syncs hourly. Code at backend/connectors.py</div>', unsafe_allow_html=True)
+            with table_column:
+                table_head = st.columns([1, 1, 2])
+                with table_head[0]:
+                    if st.button("Select all", use_container_width=True):
+                        st.session_state["row_selection_default"] = True
+                        st.session_state.pop("datalens_table_editor", None)
+                        st.rerun()
+                with table_head[1]:
+                    if st.button("Clear selection", use_container_width=True):
+                        st.session_state["row_selection_default"] = False
+                        st.session_state.pop("datalens_table_editor", None)
+                        st.rerun()
+                with table_head[2]:
+                    st.markdown(
+                        f'<div class="dl-muted" style="text-align:right;padding-top:9px">Preview · first {min(len(df), 200):,} rows</div>',
+                        unsafe_allow_html=True,
+                    )
+                preview = df.head(200).copy()
+                preview.insert(0, "Include", st.session_state.row_selection_default)
+                edited_preview = st.data_editor(
+                    preview,
+                    key="datalens_table_editor",
+                    column_config={"Include": st.column_config.CheckboxColumn("Include in chart")},
+                    disabled=[column for column in preview.columns if column != "Include"],
+                    hide_index=True,
+                    height=285,
+                    use_container_width=True,
+                )
+                selected = edited_preview["Include"].fillna(False).astype(bool)
+                selected_count = int(selected.sum())
+                if selected_count < len(edited_preview):
+                    chart_df = edited_preview.loc[selected, df.columns].copy()
+                    chart_scope = f"{selected_count:,} selected preview rows"
+                else:
+                    chart_df = df
+                    chart_scope = f"All {len(df):,} rows"
+
+            chart_df = chart_df if df is not None else None
+            if chart_df is None or chart_df.empty:
+                figure = None
+            else:
+                if metric == "Rows":
+                    grouped = chart_df[category].value_counts(dropna=False).rename("value").reset_index()
+                    grouped.columns = [category, "value"]
+                    metric_label = "Rows"
+                else:
+                    grouped = (
+                        chart_df.groupby(category, dropna=False)[metric]
+                        .sum()
+                        .sort_values(ascending=False)
+                        .reset_index(name="value")
+                    )
+                    metric_label = metric
+                if chart_type == "Pie chart":
+                    figure = px.pie(grouped, names=category, values="value", hole=0.18)
+                elif chart_type == "Horizontal chart":
+                    figure = px.bar(grouped.sort_values("value"), x="value", y=category, orientation="h", color_discrete_sequence=["#16a34a"])
+                else:
+                    figure = px.bar(grouped, x=category, y="value", color_discrete_sequence=["#2563eb"])
+                figure.update_layout(
+                    template="plotly_white",
+                    paper_bgcolor="#ffffff",
+                    plot_bgcolor="#ffffff",
+                    font_color="#1f2430",
+                    height=400,
+                    margin=dict(l=12, r=12, t=20, b=18),
+                    showlegend=(chart_type == "Pie chart"),
+                    xaxis_title=None if chart_type == "Horizontal chart" else metric_label,
+                    yaxis_title=category if chart_type == "Horizontal chart" else None,
+                )
+                figure.update_xaxes(showgrid=True, gridcolor="#e3e6ec", zeroline=False)
+                figure.update_yaxes(showgrid=False, zeroline=False)
+            with chart_slot.container():
+                chart_title = f"{metric if metric != 'Rows' else 'Rows'} by {category}"
+                chart_meta = chart_scope if chart_df is not None else "No rows selected"
+                chart_header = st.columns([2.5, 1])
+                with chart_header[0]:
+                    st.markdown(
+                        f'<div class="dl-card-title">{html.escape(chart_title)}</div><div class="dl-muted">{html.escape(chart_meta)}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with chart_header[1]:
+                    if figure is not None:
+                        st.download_button(
+                            "Export chart",
+                            figure.to_html(full_html=True, include_plotlyjs="cdn"),
+                            "aurlex_dashboard.html",
+                            "text/html",
+                            use_container_width=True,
+                        )
+                if figure is None:
+                    st.info("No rows are selected. Select rows in the preview to redraw the chart.")
+                else:
+                    st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+
+    with chat_column:
+        st.markdown('<div class="dl-chat-head">AI Assistant</div>', unsafe_allow_html=True)
+        st.caption("Ask about the current dataset")
+        messages_area = st.container()
+        with messages_area:
+            for message in st.session_state.messages[-12:]:
+                role = "user" if message.get("role") == "user" else "bot"
+                safe_message = html.escape(str(message.get("content", "")))
+                st.markdown(f'<div class="dl-msg {role}">{safe_message}</div>', unsafe_allow_html=True)
+        with st.form("datalens_chat_form", clear_on_submit=True):
+            question = st.text_input("Ask about your data", placeholder="Ask about your data…", label_visibility="collapsed")
+            send = st.form_submit_button("Send", use_container_width=True, type="primary")
+        if send:
+            st.session_state.messages.append({"role": "user", "content": question})
+            st.session_state.messages.append(
+                {"role": "assistant", "content": answer_with_ai(question, df, category if df is not None else None, metric if df is not None else None, api_health)}
+            )
+            st.rerun()
+
+elif page == "Data Lab":
+    if df is None:
+        st.info("Load a dataset from the left to use Data Lab.")
+    else:
+        st.markdown('<div class="dl-card-title">Clean, filter, and build a chart</div>', unsafe_allow_html=True)
+        tools = st.columns(5, gap="small")
+        with tools[0]:
+            if st.button("Auto clean", use_container_width=True):
+                run_clean(df, api_health)
+                st.rerun()
+        with tools[1]:
+            sort_column = st.selectbox("Sort by", ["None"] + df.columns.tolist(), key="lab_sort")
+        with tools[2]:
+            sort_direction = st.selectbox("Direction", ["asc", "desc"], key="lab_direction")
+        with tools[3]:
+            filter_column = st.selectbox("Filter column", ["None"] + df.columns.tolist(), key="lab_filter_column")
+        with tools[4]:
+            filter_value = st.text_input("Contains", key="lab_filter_value")
+        if st.button("Apply sort and filter"):
+            filtered = df.copy()
+            if filter_column != "None" and filter_value:
+                filtered = filtered[filtered[filter_column].astype(str).str.contains(filter_value, case=False, na=False)]
+            if sort_column != "None":
+                filtered = filtered.sort_values(sort_column, ascending=sort_direction == "asc")
+            set_dataset(filtered.reset_index(drop=True), st.session_state.table_name, st.session_state.source_files, st.session_state.loaded_upload_fingerprint)
+            st.rerun()
+
+        chart_columns = st.columns(3)
+        with chart_columns[0]:
+            lab_type = st.selectbox("Chart", ["Bar", "Line", "Area", "Scatter", "Histogram"], key="lab_type")
+        with chart_columns[1]:
+            lab_x = st.selectbox("X axis", df.columns.tolist(), key="lab_x")
+        with chart_columns[2]:
+            lab_y = st.selectbox("Y axis", numeric_cols or df.columns.tolist(), key="lab_y")
+        if lab_type == "Bar":
+            lab_fig = px.bar(df, x=lab_x, y=lab_y, template="plotly_white")
+        elif lab_type == "Line":
+            lab_fig = px.line(df, x=lab_x, y=lab_y, template="plotly_white")
+        elif lab_type == "Area":
+            lab_fig = px.area(df, x=lab_x, y=lab_y, template="plotly_white")
+        elif lab_type == "Scatter":
+            lab_fig = px.scatter(df, x=lab_x, y=lab_y, template="plotly_white")
+        else:
+            lab_fig = px.histogram(df, x=lab_x, template="plotly_white")
+        st.plotly_chart(lab_fig, use_container_width=True)
+        st.dataframe(df.head(500), use_container_width=True, height=340)
+
+elif page == "Ask Aurlex":
+    if df is None:
+        st.info("Load a dataset from the left to ask questions.")
+    else:
+        question = st.text_area("Ask in plain English", placeholder="e.g., What are the top five regions by revenue?")
+        if st.button("Run query"):
+            answer = answer_with_ai(question, df, category_cols[0] if category_cols else None, numeric_cols[0] if numeric_cols else "Rows", api_health)
+            st.markdown(f'<div class="dl-card">{html.escape(answer)}</div>', unsafe_allow_html=True)
+        if st.session_state.disambig_ctx:
+            st.caption(f"Clarification context: {st.session_state.disambig_ctx}")
+
+elif page == "Reports":
+    if df is None:
+        st.info("Load a dataset from the left to enable exports.")
+    else:
+        render_downloads(df, st.session_state.table_name)
+        st.markdown("#### Dataset preview")
+        st.dataframe(df.head(500), use_container_width=True)
 
 else:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    csv_data=df.to_csv(index=False).encode('utf-8')
-    st.download_button('Download CSV',data=csv_data,file_name='aurlex_clean.csv',mime='text/csv',use_container_width=True)
-    buf=io.BytesIO()
-    with pd.ExcelWriter(buf,engine='openpyxl') as w:
-        df.to_excel(w,index=False,sheet_name='Clean')
-    st.download_button('Download Excel',data=buf.getvalue(),file_name='aurlex_report.xlsx',use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="dl-card"><div class="dl-card-title">Data connectors</div><p class="dl-muted">The connector view is a placeholder. The current dashboard supports local file uploads and multi-file merges.</p></div>',
+        unsafe_allow_html=True,
+    )
+
