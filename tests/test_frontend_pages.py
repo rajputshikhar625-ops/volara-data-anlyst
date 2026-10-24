@@ -53,6 +53,19 @@ class FrontendSmokeTests(unittest.TestCase):
         self.assertIn("+ Donut chart", [button.label for button in app.button])
         self.assertIn("PDF", [button.label for button in app.get("download_button")])
 
+    def test_dashboard_chart_tiles_have_independent_colors(self):
+        app = AppTest.from_file("frontend/app.py", default_timeout=90).run()
+        next(button for button in app.button if button.label == "Load sample dataset").click().run()
+        app.radio(key="report_page").set_value("Dashboard").run()
+        colors = {picker.key: picker.value for picker in app.get("color_picker") if picker.key.startswith("builder_color_")}
+        self.assertEqual(len(colors), 3)
+        self.assertEqual(len(set(colors.values())), 3)
+
+    def test_home_ribbon_has_no_duplicate_select_all_button(self):
+        app = AppTest.from_file("frontend/app.py", default_timeout=60).run()
+        self.assertNotIn("Select all", [button.label for button in app.button])
+        self.assertIn("Select all", next(select for select in app.selectbox if select.key == "designer_selection_action").options)
+
     def test_dashboard_pdf_is_a_valid_pdf_payload(self):
         content = build_pdf_report(pd.DataFrame({"Region": ["North"], "Revenue": [12]}), "sales")
         self.assertTrue(content.startswith(b"%PDF"))
