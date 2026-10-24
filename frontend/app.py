@@ -444,22 +444,18 @@ if page == "Dashboard":
                     st.rerun()
 
             with table_column:
-                table_head = st.columns([1, 1, 2])
-                with table_head[0]:
-                    if st.button("Select all", use_container_width=True):
-                        st.session_state["row_selection_default"] = True
-                        st.session_state.pop("datalens_table_editor", None)
-                        st.rerun()
-                with table_head[1]:
-                    if st.button("Clear selection", use_container_width=True):
-                        st.session_state["row_selection_default"] = False
-                        st.session_state.pop("datalens_table_editor", None)
-                        st.rerun()
-                with table_head[2]:
-                    st.markdown(
-                        f'<div class="dl-muted" style="text-align:right;padding-top:9px">Preview · first {min(len(df), 200):,} rows</div>',
-                        unsafe_allow_html=True,
-                    )
+                if st.button("Select all preview rows", use_container_width=True):
+                    st.session_state["row_selection_default"] = True
+                    st.session_state.pop("datalens_table_editor", None)
+                    st.rerun()
+                if st.button("Clear preview selection", use_container_width=True):
+                    st.session_state["row_selection_default"] = False
+                    st.session_state.pop("datalens_table_editor", None)
+                    st.rerun()
+                st.markdown(
+                    f'<div class="dl-muted" style="text-align:right;padding:6px 0">Preview · first {min(len(df), 200):,} rows</div>',
+                    unsafe_allow_html=True,
+                )
                 preview = df.head(200).copy()
                 preview.insert(0, "Include", st.session_state.row_selection_default)
                 edited_preview = st.data_editor(
@@ -628,4 +624,5 @@ else:
         '<div class="dl-card"><div class="dl-card-title">Data connectors</div><p class="dl-muted">The connector view is a placeholder. The current dashboard supports local file uploads and multi-file merges.</p></div>',
         unsafe_allow_html=True,
     )
+
 
